@@ -5,7 +5,17 @@ namespace EvDataExporter
 {
     /// <summary>
     /// จัดการ MySQL connection และ export CSV
-    /// รับค่า config จาก ConfigManager (ไม่อ่าน .ini เอง)
+    /// ตาราง: db_thanes_conhis_system_nonthavej.tb_thaneshos_middle
+    ///
+    /// CSV spec:
+    ///   Encode  : UTF-8 (no BOM)
+    ///   Header  : ไม่มี
+    ///   Quote   : ทุก field ครอบด้วย "…"
+    ///   " ใน value: double → ""
+    ///   Newline ใน mass-print field (WarningMsg1-6, CautionMsg): แทนด้วย *\n
+    ///   CRLF ท้ายบรรทัด
+    ///
+    /// ชื่อไฟล์: YYYYMMDD_HHMMSS_SeqNo_PrescriptionNo.csv
     /// </summary>
     public class Databasetocsv : IDisposable
     {
@@ -13,10 +23,11 @@ namespace EvDataExporter
         private MySqlConnection? _conn;
 
         public string ConnectionString { get; }
-        public string SaveFolder { get; }   // โฟลเดอร์ปลายทาง
+        public string SaveFolder { get; }
+        public string MachineNo { get; }
         public bool IsConnected { get; private set; }
 
-        // sequence counter รีเซ็ตทุกวัน (เก็บ date ล่าสุดไว้เปรียบเทียบ)
+        // sequence counter รีเซ็ตทุกวัน
         private int _seqNo = 0;
         private string _seqDate = "";
 
@@ -28,10 +39,10 @@ namespace EvDataExporter
         private static readonly Color _green = Color.FromArgb(52, 199, 89);
         private static readonly Color _red = Color.FromArgb(255, 69, 58);
 
+        // Source DB name (อ่านจาก config)
+        private readonly string _sourceDb;
+
         // ─────────────────────────────────────────────────────────────────
-        /// <summary>
-        /// รับค่าจาก ConfigManager โดยตรง
-        /// </summary>
         public Databasetocsv(
             Config config,
             PictureBox picStatus,
@@ -39,19 +50,22 @@ namespace EvDataExporter
             Label lblStatus)
         {
             if (!config.IsValid)
-                throw new InvalidOperationException(
-                    "ConfigManager ยังไม่ผ่าน validation");
+                throw new InvalidOperationException("Config ยังไม่ผ่าน validation");
 
             SaveFolder = config.SaveFolder;
+            MachineNo = config.MachineNo;
             _picStatus = picStatus;
             _picDot = picDot;
             _lblStatus = lblStatus;
+
+            // ── ชื่อ source DB คงที่ตาม requirement ──────────────────────
+            _sourceDb = "db_thanes_conhis_system_nonthavej";
 
             ConnectionString = new MySqlConnectionStringBuilder
             {
                 Server = config.DbServer,
                 Port = uint.TryParse(config.DbPort, out uint p) ? p : 3306,
-                Database = config.DbName,
+                Database = config.DbName,   // db_thanes_system_pattaya
                 UserID = config.DbUser,
                 Password = config.DbPassword,
                 ConnectionTimeout = 5,
@@ -60,7 +74,6 @@ namespace EvDataExporter
         }
 
         // ─────────────────────────────────────────────────────────────────
-        /// <summary>ทดสอบ connect → อัปเดต dot + status bar</summary>
         public async Task TestConnectionAsync()
         {
             SetText(_lblStatus, "Connecting…");
@@ -80,7 +93,6 @@ namespace EvDataExporter
         }
 
         // ─────────────────────────────────────────────────────────────────
-        /// <summary>เปิด connection จริงก่อน query/export</summary>
         public async Task OpenAsync()
         {
             _conn = new MySqlConnection(ConnectionString);
@@ -92,30 +104,38 @@ namespace EvDataExporter
 
         // ─────────────────────────────────────────────────────────────────
         /// <summary>
-        /// ดึง Evbodyreq ทุก field → เขียน CSV แยกไฟล์ต่อ 1 record
-        /// ชื่อไฟล์: YYYYMMDD_HHMMSS_SeqNo_PrescriptionNo.csv
+        /// ดึง tb_thaneshos_middle WHERE f_tomachineno=MachineNo AND f_dispensestatus_ev=0
+        /// เขียน CSV แยกไฟล์ต่อ 1 record (no header, UTF-8 no BOM, CRLF)
+        /// จากนั้น UPDATE f_dispensestatus_ev=1 ตาม PrescriptionItemID
         /// </summary>
         public async Task<int> ExportCsvAsync(
             IProgress<(int exported, int total)>? progress = null)
         {
-            // นับ total
+            // ── นับ total ─────────────────────────────────────────────────
             int total;
             using (var cnt = Conn.CreateCommand())
             {
-                cnt.CommandText = "SELECT COUNT(*) FROM ev_body_req WHERE exported_flag = 0";
+                cnt.CommandText =
+                    $"SELECT COUNT(*) FROM {_sourceDb}.tb_thaneshos_middle " +
+                    $"WHERE f_tomachineno = @mn AND f_dispensestatus_ev = 0";
+                cnt.Parameters.AddWithValue("@mn", MachineNo);
                 total = Convert.ToInt32(await cnt.ExecuteScalarAsync());
             }
             if (total == 0) return 0;
 
-            // สร้างโฟลเดอร์ถ้ายังไม่มี
+            // ── สร้างโฟลเดอร์ถ้ายังไม่มี ─────────────────────────────────
             Directory.CreateDirectory(SaveFolder);
 
-            // query
+            // ── Query ─────────────────────────────────────────────────────
             using var cmd = Conn.CreateCommand();
             cmd.CommandText = BuildSelectQuery();
+            cmd.Parameters.AddWithValue("@mn", MachineNo);
 
             var exportedIds = new List<string>();
             int count = 0;
+
+            // UTF-8 no BOM
+            var utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 
             using (var reader = await cmd.ExecuteReaderAsync())
             {
@@ -124,47 +144,49 @@ namespace EvDataExporter
                     var row = MapRow(reader);
                     var now = DateTime.Now;
 
-                    // ── สร้างชื่อไฟล์ ──────────────────────────────────────
                     string filePath = BuildFilePath(now, row.PrescriptionNo);
 
-                    // ── เขียน CSV 1 ไฟล์ต่อ 1 record (header + 1 data row) ─
-                    await using var sw = new StreamWriter(filePath, append: false, Encoding.UTF8);
-                    await sw.WriteLineAsync(CsvHeader());
+                    // เขียน CSV: no header, CRLF ท้ายบรรทัด
+                    await using var sw = new StreamWriter(
+                        filePath, append: false, utf8NoBom);
+                    sw.NewLine = "\r\n";    // force CRLF
+
                     await sw.WriteLineAsync(ToCsvRow(row));
 
-                    exportedIds.Add(row.PrescriptionNo);
+                    exportedIds.Add(row.PrescriptionItemID);
                     count++;
                     progress?.Report((count, total));
                 }
             }
 
-            // mark exported = 1
+            // ── UPDATE f_dispensestatus_ev = 1 ตาม PrescriptionItemID ────
             if (exportedIds.Count > 0)
             {
-                var inList = string.Join(",",
-                    exportedIds.Select(id => $"'{id.Replace("'", "''")}'"));
-                using var upd = Conn.CreateCommand();
-                upd.CommandText =
-                    $"UPDATE ev_body_req SET exported_flag = 1 WHERE PrescriptionNo IN ({inList})";
-                await upd.ExecuteNonQueryAsync();
+                // แบ่ง batch ป้องกัน query ยาวเกิน
+                const int batchSize = 500;
+                for (int i = 0; i < exportedIds.Count; i += batchSize)
+                {
+                    var batch = exportedIds.Skip(i).Take(batchSize);
+                    var inList = string.Join(",",
+                        batch.Select(id => $"'{id.Replace("'", "''")}'"));
+
+                    using var upd = Conn.CreateCommand();
+                    upd.CommandText =
+                        $"UPDATE {_sourceDb}.tb_thaneshos_middle " +
+                        $"SET f_dispensestatus_ev = 1 " +
+                        $"WHERE PrescriptionItemID IN ({inList})";
+                    await upd.ExecuteNonQueryAsync();
+                }
             }
 
             return count;
         }
 
         // ─────────────────────────────────────────────────────────────────
-        /// <summary>
-        /// สร้าง full path ของไฟล์ CSV
-        /// รูปแบบ: {SaveFolder}\YYYYMMDD_HHMMSS_SeqNo_PrescriptionNo.csv
-        ///
-        /// SeqNo รีเซ็ตเป็น 1 ทุกวัน และเพิ่มขึ้น 1 ต่อ record ในวันนั้น
-        /// zero-padded 6 หลัก เช่น 000001
-        /// </summary>
         private string BuildFilePath(DateTime now, string prescriptionNo)
         {
             string today = now.ToString("yyyyMMdd");
 
-            // รีเซ็ต sequence เมื่อขึ้นวันใหม่
             if (_seqDate != today)
             {
                 _seqDate = today;
@@ -172,14 +194,12 @@ namespace EvDataExporter
             }
             _seqNo++;
 
-            // sanitize PrescriptionNo ให้ปลอดภัยเป็นชื่อไฟล์
             string safePresc = SanitizeFileName(prescriptionNo);
-
+            // YYYYMMDD_HHMMSS_SeqNo_PrescriptionNo.csv
             string fileName = $"{today}_{now:HHmmss}_{_seqNo:D6}_{safePresc}.csv";
             return Path.Combine(SaveFolder, fileName);
         }
 
-        /// <summary>ลบอักขระต้องห้ามในชื่อไฟล์ออก</summary>
         private static string SanitizeFileName(string name)
         {
             char[] invalid = Path.GetInvalidFileNameChars();
@@ -189,78 +209,93 @@ namespace EvDataExporter
         // ─────────────────────────────────────────────────────────────────
         //  Query builder
         // ─────────────────────────────────────────────────────────────────
-        private static string BuildSelectQuery() => @"
-            SELECT
-                PrescriptionNo,      PatientID,           PatientName,
-                HkId,                BirthDay,            Sex,
-                PatCatCd,            SpecCd,              IOFlag,
-                HospitalCd,          HospitalName,        WorkStoreCd,
-                WardCd,              WardName,            RoomNo,
-                BedNo,               DoctorCd,            DoctorName,
-                PrescriptionDate,    DrugCd,              DrugName,
-                TradeName,           DispensedDose,       DispensedUnit,
-                FormCd,              FreqDescCd,          FreqDesc1,
-                FreqDesc2,           ItemNo,              TicketNo,
-                CautionMsg,          WarningMsg1,         WarningMsg2,
-                WarningMsg3,         WarningMsg4,         WarningMsg5,
-                WarningMsg6,         UserCd,              PrescType,
-                FdnFlag,             PrintLang,           PrintType,
-                PrintIntsFlag,       PrintBarcodeFlag,    PrintWardReturnFlag,
-                PreBarCd1,           PreBarCd2,
-                DeltaChangeInd,      UpdateDate,
-                Reserve1,            Reserve2,            Reserve3,
-                Reserve4,            Reserve5
-            FROM  ev_body_req
-            WHERE exported_flag = 0
+        private string BuildSelectQuery() =>
+            $@"SELECT
+                PrescriptionItemID,
+                PrescriptionNo,
+                PatientID,        PatientName,      HkId,
+                BirthDay,         Sex,              PatCatCd,
+                SpecCd,           IOFlag,           HospitalCd,
+                HospitalName,     WorkStoreCd,      WardCd,
+                WardName,         RoomNo,           BedNo,
+                DoctorCd,         DoctorName,       PrescriptionDate,
+                DrugCd,           DrugName,         TradeName,
+                DispensedDose,    DispensedUnit,    FormCd,
+                FreqDescCd,       FreqDesc1,        FreqDesc2,
+                ItemNo,           TicketNo,         CautionMsg,
+                WarningMsg1,      WarningMsg2,      WarningMsg3,
+                WarningMsg4,      WarningMsg5,      WarningMsg6,
+                UserCd,           PrescType,        FdnFlag,
+                PrintLang,        PrintType,        PrintIntsFlag,
+                PrintBarcodeFlag, PrintWardReturnFlag,
+                PreBarCd1,        PreBarCd2,
+                DeltaChangeInd,   UpdateDate,
+                Reserve1,         Reserve2,         Reserve3,
+                Reserve4,         Reserve5,
+                f_tomachineno,    f_dispensestatus_ev
+            FROM  {_sourceDb}.tb_thaneshos_middle
+            WHERE f_tomachineno = @mn
+              AND f_dispensestatus_ev = 0
             ORDER BY PrescriptionDate, PrescriptionNo";
 
         // ─────────────────────────────────────────────────────────────────
         //  CSV helpers
         // ─────────────────────────────────────────────────────────────────
-        private static string CsvHeader() =>
-            "PrescriptionNo,PatientID,PatientName,HkId,BirthDay,Sex," +
-            "PatCatCd,SpecCd,IOFlag,HospitalCd,HospitalName,WorkStoreCd," +
-            "WardCd,WardName,RoomNo,BedNo,DoctorCd,DoctorName," +
-            "PrescriptionDate,DrugCd,DrugName,TradeName," +
-            "DispensedDose,DispensedUnit,FormCd,FreqDescCd,FreqDesc1,FreqDesc2," +
-            "ItemNo,TicketNo,CautionMsg," +
-            "WarningMsg1,WarningMsg2,WarningMsg3,WarningMsg4,WarningMsg5,WarningMsg6," +
-            "UserCd,PrescType,FdnFlag,PrintLang,PrintType,PrintIntsFlag," +
-            "PrintBarcodeFlag,PrintWardReturnFlag,PreBarCd1,PreBarCd2," +
-            "DeltaChangeInd,UpdateDate,Reserve1,Reserve2,Reserve3,Reserve4,Reserve5";
 
-        private static string ToCsvRow(Evbodyreq r) =>
+        /// <summary>
+        /// สร้าง CSV 1 บรรทัด (ไม่มี header)
+        /// mass-print fields (CautionMsg, WarningMsg1-6): CRLF → *\n
+        /// </summary>
+        private static string ToCsvRow(TbThaneshosMiddle r) =>
             string.Join(",", new[]
             {
-                Q(r.PrescriptionNo),    Q(r.PatientID),        Q(r.PatientName),
-                Q(r.HkId),              Q(r.BirthDay),         Q(r.Sex),
-                Q(r.PatCatCd),          Q(r.SpecCd),           Q(r.IOFlag),
-                Q(r.HospitalCd),        Q(r.HospitalName),     Q(r.WorkStoreCd),
-                Q(r.WardCd),            Q(r.WardName),         Q(r.RoomNo),
-                Q(r.BedNo),             Q(r.DoctorCd),         Q(r.DoctorName),
-                Q(r.PrescriptionDate),  Q(r.DrugCd),           Q(r.DrugName),
-                Q(r.TradeName),         Q(r.DispensedDose),    Q(r.DispensedUnit),
-                Q(r.FormCd),            Q(r.FreqDescCd),       Q(r.FreqDesc1),
-                Q(r.FreqDesc2),         Q(r.ItemNo),           Q(r.TicketNo),
-                Q(r.CautionMsg),        Q(r.WarningMsg1),      Q(r.WarningMsg2),
-                Q(r.WarningMsg3),       Q(r.WarningMsg4),      Q(r.WarningMsg5),
-                Q(r.WarningMsg6),       Q(r.UserCd),           Q(r.PrescType),
-                Q(r.FdnFlag),           Q(r.PrintLang),        Q(r.PrintType),
-                Q(r.PrintIntsFlag),     Q(r.PrintBarcodeFlag), Q(r.PrintWardReturnFlag),
-                Q(r.PreBarCd1),         Q(r.PreBarCd2),
-                Q(r.DeltaChangeInd),    Q(r.UpdateDate),
-                Q(r.Reserve1),          Q(r.Reserve2),         Q(r.Reserve3),
-                Q(r.Reserve4),          Q(r.Reserve5)
+                Q(r.PrescriptionNo),        Q(r.PatientID),           Q(r.PatientName),
+                Q(r.HkId),                  Q(r.BirthDay),            Q(r.Sex),
+                Q(r.PatCatCd),              Q(r.SpecCd),              Q(r.IOFlag),
+                Q(r.HospitalCd),            Q(r.HospitalName),        Q(r.WorkStoreCd),
+                Q(r.WardCd),               Q(r.WardName),            Q(r.RoomNo),
+                Q(r.BedNo),                 Q(r.DoctorCd),            Q(r.DoctorName),
+                Q(r.PrescriptionDate),      Q(r.DrugCd),              Q(r.DrugName),
+                Q(r.TradeName),             Q(r.DispensedDose),       Q(r.DispensedUnit),
+                Q(r.FormCd),                Q(r.FreqDescCd),          Q(r.FreqDesc1),
+                Q(r.FreqDesc2),             Q(r.ItemNo),              Q(r.TicketNo),
+                QMsg(r.CautionMsg),
+                QMsg(r.WarningMsg1),        QMsg(r.WarningMsg2),      QMsg(r.WarningMsg3),
+                QMsg(r.WarningMsg4),        QMsg(r.WarningMsg5),      QMsg(r.WarningMsg6),
+                Q(r.UserCd),                Q(r.PrescType),           Q(r.FdnFlag),
+                Q(r.PrintLang),             Q(r.PrintType),           Q(r.PrintIntsFlag),
+                Q(r.PrintBarcodeFlag),      Q(r.PrintWardReturnFlag),
+                Q(r.PreBarCd1),             Q(r.PreBarCd2),
+                Q(r.DeltaChangeInd),        Q(r.UpdateDate),
+                Q(r.Reserve1),              Q(r.Reserve2),            Q(r.Reserve3),
+                Q(r.Reserve4),              Q(r.Reserve5)
             });
 
+        /// <summary>Quote ธรรมดา: " → "" ไม่แตะ newline</summary>
         private static string Q(string? v) =>
             $"\"{(v ?? "").Replace("\"", "\"\"")}\"";
+
+        /// <summary>
+        /// Quote สำหรับ mass-print fields:
+        /// CRLF / LF / CR → *\n  จากนั้น " → ""
+        /// </summary>
+        private static string QMsg(string? v)
+        {
+            if (v is null) return "\"\"";
+            // แทน newline ทุกรูปแบบด้วย *\n
+            var normalized = v
+                .Replace("\r\n", "*\\n")
+                .Replace("\r", "*\\n")
+                .Replace("\n", "*\\n");
+            return $"\"{normalized.Replace("\"", "\"\"")}\"";
+        }
 
         // ─────────────────────────────────────────────────────────────────
         //  Row mapper
         // ─────────────────────────────────────────────────────────────────
-        private static Evbodyreq MapRow(System.Data.Common.DbDataReader r) => new()
+        private static TbThaneshosMiddle MapRow(System.Data.Common.DbDataReader r) => new()
         {
+            PrescriptionItemID = Col(r, "PrescriptionItemID"),
             PrescriptionNo = Col(r, "PrescriptionNo"),
             PatientID = Col(r, "PatientID"),
             PatientName = Col(r, "PatientName"),
@@ -315,12 +350,13 @@ namespace EvDataExporter
             Reserve3 = Col(r, "Reserve3"),
             Reserve4 = Col(r, "Reserve4"),
             Reserve5 = Col(r, "Reserve5"),
+            f_tomachineno = Col(r, "f_tomachineno"),
         };
 
         private static string Col(System.Data.Common.DbDataReader r, string col)
         {
             int i = r.GetOrdinal(col);
-            return r.IsDBNull(i) ? "" : r.GetString(i);
+            return r.IsDBNull(i) ? "" : r.GetValue(i).ToString() ?? "";
         }
 
         // ─────────────────────────────────────────────────────────────────

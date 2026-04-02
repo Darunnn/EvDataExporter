@@ -1,22 +1,13 @@
-﻿using System.Runtime.InteropServices;
-using System.Text;
+﻿using System.Text;
 
 namespace EvDataExporter
 {
     /// <summary>
     /// อ่านและตรวจสอบความถูกต้องของ config.ini
-    /// แยกออกจาก DatabaseManager โดยสมบูรณ์
+    /// รองรับ format: Key=Value; (connection string style)
     /// </summary>
     public class Config
     {
-        // ── Windows API อ่าน .ini ────────────────────────────────────────
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-        private static extern int GetPrivateProfileString(
-            string section, string key, string defaultVal,
-            StringBuilder result, int size, string filePath);
-
-        private const int BUF = 512;
-
         // ── Path ─────────────────────────────────────────────────────────
         public string IniPath { get; }
 
@@ -32,6 +23,9 @@ namespace EvDataExporter
         /// </summary>
         public string SaveFolder { get; private set; } = "";
 
+        // ── MachineNo filter ─────────────────────────────────────────────
+        public string MachineNo { get; private set; } = "11";
+
         // ── Validation result ────────────────────────────────────────────
         public bool IsValid { get; private set; }
         public List<ConfigError> Errors { get; private set; } = new();
@@ -44,7 +38,7 @@ namespace EvDataExporter
 
         // ─────────────────────────────────────────────────────────────────
         /// <summary>
-        /// อ่าน config.ini แล้ว validate ทุก field
+        /// อ่าน config.ini แบบ Key=Value; แล้ว validate ทุก field
         /// ผลลัพธ์อยู่ใน IsValid และ Errors
         /// </summary>
         public void LoadAndValidate()
@@ -56,25 +50,45 @@ namespace EvDataExporter
             if (!File.Exists(IniPath))
             {
                 Errors.Add(new ConfigError(
-                    ConfigSection.File,
-                    "IniPath",
+                    ConfigSection.File, "IniPath",
                     $"ไม่พบไฟล์ config: {IniPath}"));
                 return;
             }
 
-            // ── 2. อ่านค่า ───────────────────────────────────────────────
-            DbServer = Ini("Database", "Server", "");
-            DbPort = Ini("Database", "Port", "3306");
-            DbName = Ini("Database", "Database", "");
-            DbUser = Ini("Database", "Username", "");
-            DbPassword = Ini("Database", "Password", "");
-            SaveFolder = Ini("Export", "SaveFolder", "");
+            // ── 2. อ่านทุก line แล้ว parse Key=Value ──────────────────────
+            var pairs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-            // ── 3. validate แต่ละ field ──────────────────────────────────
+            foreach (var rawLine in File.ReadAllLines(IniPath, Encoding.UTF8))
+            {
+                // ข้าม comment และ section header
+                var line = rawLine.Trim();
+                if (string.IsNullOrEmpty(line) || line.StartsWith(";") || line.StartsWith("#"))
+                    continue;
+
+                // split ที่ = ตัวแรกเท่านั้น
+                int eq = line.IndexOf('=');
+                if (eq < 1) continue;
+
+                var key = line[..eq].Trim().TrimEnd(';');
+                // ลบ ; ท้าย value ออก (connection string style)
+                var val = line[(eq + 1)..].Trim().TrimEnd(';');
+                pairs[key] = val;
+            }
+
+            // ── 3. Map ค่า ────────────────────────────────────────────────
+            DbServer = Get(pairs, "Server");
+            DbPort = Get(pairs, "Port", "3306");
+            DbName = Get(pairs, "Database");
+            DbUser = Get(pairs, "User Id");         // "User Id" ตาม format ใหม่
+            DbPassword = Get(pairs, "Password");
+            SaveFolder = Get(pairs, "SaveFolder");
+            MachineNo = Get(pairs, "MachineNo", "11");
+
+            // ── 4. Validate ───────────────────────────────────────────────
             ValidateRequired(ConfigSection.Database, "Server", DbServer);
             ValidatePort(DbPort);
             ValidateRequired(ConfigSection.Database, "Database", DbName);
-            ValidateRequired(ConfigSection.Database, "Username", DbUser);
+            ValidateRequired(ConfigSection.Database, "User Id", DbUser);
             ValidateSaveFolder(SaveFolder);
 
             IsValid = Errors.Count == 0;
@@ -85,13 +99,11 @@ namespace EvDataExporter
         public void CreateDefault()
         {
             if (File.Exists(IniPath)) return;
-
             Directory.CreateDirectory(Path.GetDirectoryName(IniPath) ?? ".");
-            File.WriteAllText(IniPath, DefaultTemplate(), Encoding.UTF8);
+            File.WriteAllText(IniPath, DefaultTemplate(), new UTF8Encoding(false));
         }
 
         // ─────────────────────────────────────────────────────────────────
-        /// <summary>แสดง error ทั้งหมดเป็น string สำหรับ MessageBox</summary>
         public string ErrorSummary()
         {
             if (IsValid) return "Config ถูกต้องทุก field";
@@ -99,8 +111,6 @@ namespace EvDataExporter
                 Errors.Select(e => $"[{e.Section}] {e.Key}: {e.Message}"));
         }
 
-        // ─────────────────────────────────────────────────────────────────
-        //  Validators
         // ─────────────────────────────────────────────────────────────────
         private void ValidateRequired(ConfigSection sec, string key, string val)
         {
@@ -124,8 +134,6 @@ namespace EvDataExporter
                     ConfigSection.Export, "SaveFolder", "ต้องระบุ SaveFolder"));
                 return;
             }
-
-            // ตรวจอักขระต้องห้ามใน path
             char[] invalid = Path.GetInvalidPathChars();
             if (folder.Any(c => invalid.Contains(c)))
                 Errors.Add(new ConfigError(
@@ -134,29 +142,26 @@ namespace EvDataExporter
         }
 
         // ─────────────────────────────────────────────────────────────────
-        private string Ini(string sec, string key, string def)
-        {
-            var sb = new StringBuilder(BUF);
-            GetPrivateProfileString(sec, key, def, sb, BUF, IniPath);
-            return sb.ToString().Trim();
-        }
+        private static string Get(
+            Dictionary<string, string> d, string key, string def = "")
+            => d.TryGetValue(key, out var v) ? v : def;
 
         private static string DefaultTemplate() => """
-            [Database]
-            Server=192.168.1.10
-            Port=3306
-            Database=EV_Production_DB
-            Username=ev_user
-            Password=ev_pass123
+            ; EV Data Exporter - config.ini
+            ; Database connection (MySQL)
+            Server=103.99.11.97;
+            Database=db_thanes_system_pattaya;
+            User Id=thanes1;
+            Password=@Thanes1234;
 
-            [Export]
-            ; โฟลเดอร์ปลายทาง — ชื่อไฟล์สร้างอัตโนมัติ: YYYYMMDD_HHMMSS_SeqNo_PrescriptionNo.csv
-            SaveFolder=C:\EV_Data
+            ; Export settings
+            ; SaveFolder = โฟลเดอร์ปลายทาง (ชื่อไฟล์สร้างอัตโนมัติ)
+            SaveFolder=C:\EV_Data;
+            MachineNo=11;
             """;
     }
 
     // ─────────────────────────────────────────────────────────────────────
     public enum ConfigSection { File, Database, Export }
-
     public record ConfigError(ConfigSection Section, string Key, string Message);
 }
