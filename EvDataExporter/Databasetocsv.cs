@@ -214,31 +214,21 @@ namespace EvDataExporter
         private string BuildSelectQuery() =>
             $@"SELECT
                 PrescriptionItemID,
-                PrescriptionNo,
-                PatientID,        PatientName,      HkId,
-                BirthDay,         Sex,              PatCatCd,
-                SpecCd,           IOFlag,           HospitalCd,
-                HospitalName,     WorkStoreCd,      WardCd,
-                WardName,         RoomNo,           BedNo,
-                DoctorCd,         DoctorName,       PrescriptionDate,
-                DrugCd,           DrugName,         TradeName,
-                DispensedDose,    DispensedUnit,    FormCd,
-                FreqDescCd,       FreqDesc1,        FreqDesc2,
-                ItemNo,           TicketNo,         CautionMsg,
-                WarningMsg1,      WarningMsg2,      WarningMsg3,
-                WarningMsg4,      WarningMsg5,      WarningMsg6,
-                UserCd,           PrescType,        FdnFlag,
-                PrintLang,        PrintType,        PrintIntsFlag,
-                PrintBarcodeFlag, PrintWardReturnFlag,
-                PreBarCd1,        PreBarCd2,
-                DeltaChangeInd,   UpdateDate,
-                Reserve1,         Reserve2,         Reserve3,
-                Reserve4,         Reserve5,
-                f_tomachineno,    f_dispensestatus_ev
-            FROM  {_sourceDb}.tb_thaneshos_middle
-            WHERE f_tomachineno = @mn
+                f_prescriptionno,
+                f_hn,        f_patientname,      f_an,
+                f_patientdob,         f_sex,              f_io_flag,
+                         f_io_flag,             f_pharmacylocationcode,   
+                      f_roomcode,           f_roomcode,
+                f_doctorcode,         f_doctorname,       f_prescriptiondate,
+                f_orderitemcode,           f_orderitemname,         f_orderitemnameTH,
+                f_orderqty,    f_orderunitcode,    
+                f_frequencycode,       f_frequencydesc,      
+                f_seq,                   f_prioritycode,
+                f_aux_local_memo,     f_qr_code, f_noteprocessing, f_dispensestatus_ev
+            FROM  db_thanes_conhis_system_nonthavej.tb_thaneshos_middle
+            WHERE f_tomachineno = '11'
               AND f_dispensestatus_ev = 0
-            ORDER BY PrescriptionDate, PrescriptionNo";
+            ORDER BY f_prescriptionno";
 
         // ─────────────────────────────────────────────────────────────────
         private static string ToCsvRow(TbThaneshosMiddle r) =>
