@@ -17,13 +17,7 @@ namespace EvDataExporter
         public string DbName { get; private set; } = "";
         public string DbUser { get; private set; } = "";
         public string DbPassword { get; private set; } = "";
-        /// <summary>
-        /// โฟลเดอร์ปลายทาง — ชื่อไฟล์จะถูกสร้างอัตโนมัติโดย DatabaseManager
-        /// รูปแบบ: YYYYMMDD_HHMMSS_SeqNo_PrescriptionNo.csv
-        /// </summary>
         public string SaveFolder { get; private set; } = "";
-
-        // ── MachineNo filter ─────────────────────────────────────────────
         public string MachineNo { get; private set; } = "11";
 
         // ── Validation result ────────────────────────────────────────────
@@ -31,22 +25,24 @@ namespace EvDataExporter
         public List<ConfigError> Errors { get; private set; } = new();
 
         // ─────────────────────────────────────────────────────────────────
-        public Config(string iniPath)
+        /// <summary>
+        /// ถ้าไม่ส่ง path → ใช้ [exe folder]\connectdatabase\config.ini
+        /// </summary>
+        public Config(string? iniPath = null)
         {
+            iniPath ??= Path.Combine(
+                AppDomain.CurrentDomain.BaseDirectory,
+                "connectdatabase",
+                "config.ini");
             IniPath = Path.GetFullPath(iniPath);
         }
 
         // ─────────────────────────────────────────────────────────────────
-        /// <summary>
-        /// อ่าน config.ini แบบ Key=Value; แล้ว validate ทุก field
-        /// ผลลัพธ์อยู่ใน IsValid และ Errors
-        /// </summary>
         public void LoadAndValidate()
         {
             Errors.Clear();
             IsValid = false;
 
-            // ── 1. ตรวจว่าไฟล์มีจริง ─────────────────────────────────────
             if (!File.Exists(IniPath))
             {
                 Errors.Add(new ConfigError(
@@ -55,36 +51,30 @@ namespace EvDataExporter
                 return;
             }
 
-            // ── 2. อ่านทุก line แล้ว parse Key=Value ──────────────────────
             var pairs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var rawLine in File.ReadAllLines(IniPath, Encoding.UTF8))
             {
-                // ข้าม comment และ section header
                 var line = rawLine.Trim();
-                if (string.IsNullOrEmpty(line) || line.StartsWith(";") || line.StartsWith("#"))
-                    continue;
+                if (string.IsNullOrEmpty(line) ||
+                    line.StartsWith(";") || line.StartsWith("#")) continue;
 
-                // split ที่ = ตัวแรกเท่านั้น
                 int eq = line.IndexOf('=');
                 if (eq < 1) continue;
 
                 var key = line[..eq].Trim().TrimEnd(';');
-                // ลบ ; ท้าย value ออก (connection string style)
                 var val = line[(eq + 1)..].Trim().TrimEnd(';');
                 pairs[key] = val;
             }
 
-            // ── 3. Map ค่า ────────────────────────────────────────────────
             DbServer = Get(pairs, "Server");
             DbPort = Get(pairs, "Port", "3306");
             DbName = Get(pairs, "Database");
-            DbUser = Get(pairs, "User Id");         // "User Id" ตาม format ใหม่
+            DbUser = Get(pairs, "User Id");
             DbPassword = Get(pairs, "Password");
             SaveFolder = Get(pairs, "SaveFolder");
             MachineNo = Get(pairs, "MachineNo", "11");
 
-            // ── 4. Validate ───────────────────────────────────────────────
             ValidateRequired(ConfigSection.Database, "Server", DbServer);
             ValidatePort(DbPort);
             ValidateRequired(ConfigSection.Database, "Database", DbName);
@@ -95,7 +85,7 @@ namespace EvDataExporter
         }
 
         // ─────────────────────────────────────────────────────────────────
-        /// <summary>สร้าง config.ini ใหม่ถ้ายังไม่มี</summary>
+        /// <summary>สร้าง config.ini พร้อมโฟลเดอร์ถ้ายังไม่มี</summary>
         public void CreateDefault()
         {
             if (File.Exists(IniPath)) return;
@@ -141,7 +131,6 @@ namespace EvDataExporter
                     "SaveFolder มีอักขระที่ไม่อนุญาต"));
         }
 
-        // ─────────────────────────────────────────────────────────────────
         private static string Get(
             Dictionary<string, string> d, string key, string def = "")
             => d.TryGetValue(key, out var v) ? v : def;
@@ -155,7 +144,6 @@ namespace EvDataExporter
             Password=@Thanes1234;
 
             ; Export settings
-            ; SaveFolder = โฟลเดอร์ปลายทาง (ชื่อไฟล์สร้างอัตโนมัติ)
             SaveFolder=C:\EV_Data;
             MachineNo=11;
             """;

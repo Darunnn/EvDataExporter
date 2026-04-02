@@ -11,15 +11,14 @@ namespace EvDataExporter
     ///   Encode  : UTF-8 (no BOM)
     ///   Header  : ไม่มี
     ///   Quote   : ทุก field ครอบด้วย "…"
-    ///   " ใน value: double → ""
-    ///   Newline ใน mass-print field (WarningMsg1-6, CautionMsg): แทนด้วย *\n
+    ///   " ใน value → ""
+    ///   Newline ใน mass-print field (CautionMsg, WarningMsg1-6) → *\n
     ///   CRLF ท้ายบรรทัด
     ///
     /// ชื่อไฟล์: YYYYMMDD_HHMMSS_SeqNo_PrescriptionNo.csv
     /// </summary>
     public class Databasetocsv : IDisposable
     {
-        // ── State ────────────────────────────────────────────────────────
         private MySqlConnection? _conn;
 
         public string ConnectionString { get; }
@@ -27,11 +26,9 @@ namespace EvDataExporter
         public string MachineNo { get; }
         public bool IsConnected { get; private set; }
 
-        // sequence counter รีเซ็ตทุกวัน
         private int _seqNo = 0;
         private string _seqDate = "";
 
-        // ── UI refs ──────────────────────────────────────────────────────
         private readonly PictureBox _picStatus;
         private readonly PictureBox _picDot;
         private readonly Label _lblStatus;
@@ -39,15 +36,11 @@ namespace EvDataExporter
         private static readonly Color _green = Color.FromArgb(52, 199, 89);
         private static readonly Color _red = Color.FromArgb(255, 69, 58);
 
-        // Source DB name (อ่านจาก config)
-        private readonly string _sourceDb;
+        private readonly string _sourceDb = "db_thanes_conhis_system_nonthavej";
 
         // ─────────────────────────────────────────────────────────────────
         public Databasetocsv(
-            Config config,
-            PictureBox picStatus,
-            PictureBox picDot,
-            Label lblStatus)
+            Config config, PictureBox picStatus, PictureBox picDot, Label lblStatus)
         {
             if (!config.IsValid)
                 throw new InvalidOperationException("Config ยังไม่ผ่าน validation");
@@ -58,32 +51,37 @@ namespace EvDataExporter
             _picDot = picDot;
             _lblStatus = lblStatus;
 
-            // ── ชื่อ source DB คงที่ตาม requirement ──────────────────────
-            _sourceDb = "db_thanes_conhis_system_nonthavej";
-
             ConnectionString = new MySqlConnectionStringBuilder
             {
                 Server = config.DbServer,
                 Port = uint.TryParse(config.DbPort, out uint p) ? p : 3306,
-                Database = config.DbName,   // db_thanes_system_pattaya
+                Database = config.DbName,
                 UserID = config.DbUser,
                 Password = config.DbPassword,
                 ConnectionTimeout = 5,
                 CharacterSet = "utf8mb4"
             }.ConnectionString;
+
+            Logger.Info($"Databasetocsv created — SaveFolder={SaveFolder}, MachineNo={MachineNo}");
         }
 
         // ─────────────────────────────────────────────────────────────────
         public async Task TestConnectionAsync()
         {
             SetText(_lblStatus, "Connecting…");
+            Logger.Info("TestConnectionAsync — start");
             try
             {
                 using var c = new MySqlConnection(ConnectionString);
                 await c.OpenAsync();
                 IsConnected = c.State == System.Data.ConnectionState.Open;
+                Logger.Info("TestConnectionAsync — success");
             }
-            catch { IsConnected = false; }
+            catch (Exception ex)
+            {
+                IsConnected = false;
+                Logger.Error("TestConnectionAsync — failed", ex);
+            }
 
             PaintDot(_picStatus, IsConnected ? _green : _red);
             PaintDot(_picDot, IsConnected ? _green : _red);
@@ -95,23 +93,21 @@ namespace EvDataExporter
         // ─────────────────────────────────────────────────────────────────
         public async Task OpenAsync()
         {
+            Logger.Info("OpenAsync — opening MySQL connection...");
             _conn = new MySqlConnection(ConnectionString);
             await _conn.OpenAsync();
+            Logger.Info("OpenAsync — connection opened");
         }
 
         public MySqlConnection Conn =>
             _conn ?? throw new InvalidOperationException("ยังไม่ได้ OpenAsync()");
 
         // ─────────────────────────────────────────────────────────────────
-        /// <summary>
-        /// ดึง tb_thaneshos_middle WHERE f_tomachineno=MachineNo AND f_dispensestatus_ev=0
-        /// เขียน CSV แยกไฟล์ต่อ 1 record (no header, UTF-8 no BOM, CRLF)
-        /// จากนั้น UPDATE f_dispensestatus_ev=1 ตาม PrescriptionItemID
-        /// </summary>
         public async Task<int> ExportCsvAsync(
             IProgress<(int exported, int total)>? progress = null)
         {
-            // ── นับ total ─────────────────────────────────────────────────
+            Logger.Info($"ExportCsvAsync — querying pending records (MachineNo={MachineNo})...");
+
             int total;
             using (var cnt = Conn.CreateCommand())
             {
@@ -121,20 +117,19 @@ namespace EvDataExporter
                 cnt.Parameters.AddWithValue("@mn", MachineNo);
                 total = Convert.ToInt32(await cnt.ExecuteScalarAsync());
             }
+
+            Logger.Info($"ExportCsvAsync — pending records: {total}");
             if (total == 0) return 0;
 
-            // ── สร้างโฟลเดอร์ถ้ายังไม่มี ─────────────────────────────────
             Directory.CreateDirectory(SaveFolder);
+            Logger.Info($"ExportCsvAsync — SaveFolder: {SaveFolder}");
 
-            // ── Query ─────────────────────────────────────────────────────
             using var cmd = Conn.CreateCommand();
             cmd.CommandText = BuildSelectQuery();
             cmd.Parameters.AddWithValue("@mn", MachineNo);
 
             var exportedIds = new List<string>();
             int count = 0;
-
-            // UTF-8 no BOM
             var utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 
             using (var reader = await cmd.ExecuteReaderAsync())
@@ -143,26 +138,32 @@ namespace EvDataExporter
                 {
                     var row = MapRow(reader);
                     var now = DateTime.Now;
-
                     string filePath = BuildFilePath(now, row.PrescriptionNo);
 
-                    // เขียน CSV: no header, CRLF ท้ายบรรทัด
-                    await using var sw = new StreamWriter(
-                        filePath, append: false, utf8NoBom);
-                    sw.NewLine = "\r\n";    // force CRLF
+                    Logger.Info($"Writing file: {Path.GetFileName(filePath)}");
 
-                    await sw.WriteLineAsync(ToCsvRow(row));
+                    try
+                    {
+                        await using var sw = new StreamWriter(filePath, append: false, utf8NoBom);
+                        sw.NewLine = "\r\n";
+                        await sw.WriteLineAsync(ToCsvRow(row));
 
-                    exportedIds.Add(row.PrescriptionItemID);
-                    count++;
-                    progress?.Report((count, total));
+                        exportedIds.Add(row.PrescriptionItemID);
+                        count++;
+                        progress?.Report((count, total));
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Error($"Failed to write file: {filePath}", ex);
+                        // ข้ามไฟล์นี้ ไม่หยุด export ทั้งหมด
+                    }
                 }
             }
 
-            // ── UPDATE f_dispensestatus_ev = 1 ตาม PrescriptionItemID ────
+            // UPDATE exported flag
             if (exportedIds.Count > 0)
             {
-                // แบ่ง batch ป้องกัน query ยาวเกิน
+                Logger.Info($"Updating f_dispensestatus_ev=1 for {exportedIds.Count} record(s)...");
                 const int batchSize = 500;
                 for (int i = 0; i < exportedIds.Count; i += batchSize)
                 {
@@ -170,15 +171,24 @@ namespace EvDataExporter
                     var inList = string.Join(",",
                         batch.Select(id => $"'{id.Replace("'", "''")}'"));
 
-                    using var upd = Conn.CreateCommand();
-                    upd.CommandText =
-                        $"UPDATE {_sourceDb}.tb_thaneshos_middle " +
-                        $"SET f_dispensestatus_ev = 1 " +
-                        $"WHERE PrescriptionItemID IN ({inList})";
-                    await upd.ExecuteNonQueryAsync();
+                    try
+                    {
+                        using var upd = Conn.CreateCommand();
+                        upd.CommandText =
+                            $"UPDATE {_sourceDb}.tb_thaneshos_middle " +
+                            $"SET f_dispensestatus_ev = 1 " +
+                            $"WHERE PrescriptionItemID IN ({inList})";
+                        await upd.ExecuteNonQueryAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Error($"Failed to update batch starting at index {i}", ex);
+                    }
                 }
+                Logger.Info("Update complete");
             }
 
+            Logger.Info($"ExportCsvAsync — finished. Exported: {count}/{total}");
             return count;
         }
 
@@ -186,16 +196,10 @@ namespace EvDataExporter
         private string BuildFilePath(DateTime now, string prescriptionNo)
         {
             string today = now.ToString("yyyyMMdd");
-
-            if (_seqDate != today)
-            {
-                _seqDate = today;
-                _seqNo = 0;
-            }
+            if (_seqDate != today) { _seqDate = today; _seqNo = 0; }
             _seqNo++;
 
             string safePresc = SanitizeFileName(prescriptionNo);
-            // YYYYMMDD_HHMMSS_SeqNo_PrescriptionNo.csv
             string fileName = $"{today}_{now:HHmmss}_{_seqNo:D6}_{safePresc}.csv";
             return Path.Combine(SaveFolder, fileName);
         }
@@ -206,8 +210,6 @@ namespace EvDataExporter
             return new string(name.Select(c => invalid.Contains(c) ? '_' : c).ToArray());
         }
 
-        // ─────────────────────────────────────────────────────────────────
-        //  Query builder
         // ─────────────────────────────────────────────────────────────────
         private string BuildSelectQuery() =>
             $@"SELECT
@@ -239,13 +241,6 @@ namespace EvDataExporter
             ORDER BY PrescriptionDate, PrescriptionNo";
 
         // ─────────────────────────────────────────────────────────────────
-        //  CSV helpers
-        // ─────────────────────────────────────────────────────────────────
-
-        /// <summary>
-        /// สร้าง CSV 1 บรรทัด (ไม่มี header)
-        /// mass-print fields (CautionMsg, WarningMsg1-6): CRLF → *\n
-        /// </summary>
         private static string ToCsvRow(TbThaneshosMiddle r) =>
             string.Join(",", new[]
             {
@@ -253,7 +248,7 @@ namespace EvDataExporter
                 Q(r.HkId),                  Q(r.BirthDay),            Q(r.Sex),
                 Q(r.PatCatCd),              Q(r.SpecCd),              Q(r.IOFlag),
                 Q(r.HospitalCd),            Q(r.HospitalName),        Q(r.WorkStoreCd),
-                Q(r.WardCd),               Q(r.WardName),            Q(r.RoomNo),
+                Q(r.WardCd),                Q(r.WardName),            Q(r.RoomNo),
                 Q(r.BedNo),                 Q(r.DoctorCd),            Q(r.DoctorName),
                 Q(r.PrescriptionDate),      Q(r.DrugCd),              Q(r.DrugName),
                 Q(r.TradeName),             Q(r.DispensedDose),       Q(r.DispensedUnit),
@@ -271,27 +266,16 @@ namespace EvDataExporter
                 Q(r.Reserve4),              Q(r.Reserve5)
             });
 
-        /// <summary>Quote ธรรมดา: " → "" ไม่แตะ newline</summary>
         private static string Q(string? v) =>
             $"\"{(v ?? "").Replace("\"", "\"\"")}\"";
 
-        /// <summary>
-        /// Quote สำหรับ mass-print fields:
-        /// CRLF / LF / CR → *\n  จากนั้น " → ""
-        /// </summary>
         private static string QMsg(string? v)
         {
             if (v is null) return "\"\"";
-            // แทน newline ทุกรูปแบบด้วย *\n
-            var normalized = v
-                .Replace("\r\n", "*\\n")
-                .Replace("\r", "*\\n")
-                .Replace("\n", "*\\n");
-            return $"\"{normalized.Replace("\"", "\"\"")}\"";
+            var n = v.Replace("\r\n", "*\\n").Replace("\r", "*\\n").Replace("\n", "*\\n");
+            return $"\"{n.Replace("\"", "\"\"")}\"";
         }
 
-        // ─────────────────────────────────────────────────────────────────
-        //  Row mapper
         // ─────────────────────────────────────────────────────────────────
         private static TbThaneshosMiddle MapRow(System.Data.Common.DbDataReader r) => new()
         {
@@ -378,6 +362,10 @@ namespace EvDataExporter
             pic.Image = bmp;
         }
 
-        public void Dispose() => _conn?.Dispose();
+        public void Dispose()
+        {
+            Logger.Info("Databasetocsv disposed");
+            _conn?.Dispose();
+        }
     }
 }
