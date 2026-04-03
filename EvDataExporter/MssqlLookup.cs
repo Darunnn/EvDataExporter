@@ -114,45 +114,11 @@ namespace EvDataExporter
         /// ถ้าไม่พบ หรือ connection ไม่พร้อม → คืน ""
         /// ผลลัพธ์ถูก cache ไว้ตลอด session
         /// </summary>
-        public async Task<string> GetCassetteNoAsync(string drugCd)
+        public string GetCached(string drugCd)
         {
             if (string.IsNullOrWhiteSpace(drugCd)) return "";
-
-            // ── Cache hit ────────────────────────────────────────────────
-            if (_cache.TryGetValue(drugCd, out var cached))
-                return cached;
-
-            // ── ถ้า connection ไม่พร้อมให้คืน "" ไม่หยุด export ─────────
-            if (_conn is null || _conn.State != System.Data.ConnectionState.Open)
-            {
-                Logger.Warning($"MssqlLookup.GetCassetteNoAsync — connection not open, skip DrugCd={drugCd}");
-                return "";
-            }
-
-            try
-            {
-                using var cmd = _conn.CreateCommand();
-                cmd.CommandText =
-                    $"SELECT TOP 1 ln_CassetteNo " +
-                    $"FROM [{_mssqlDatabase}].[dbo].[M_Cassette] " +
-                    $"WHERE vc_DrugCd = @drugCd";
-                cmd.Parameters.AddWithValue("@drugCd", drugCd);
-
-                var result = await cmd.ExecuteScalarAsync();
-                var cassetteNo = result is null || result == DBNull.Value
-                    ? ""
-                    : result.ToString() ?? "";
-
-                _cache[drugCd] = cassetteNo;
-                Logger.Info($"MssqlLookup — DrugCd={drugCd} → CassetteNo={cassetteNo}");
-                return cassetteNo;
-            }
-            catch (Exception ex)
-            {
-                Logger.Error($"MssqlLookup.GetCassetteNoAsync — failed for DrugCd={drugCd}", ex);
-                _cache[drugCd] = "";
-                return "";
-            }
+            _cache.TryGetValue(drugCd, out var result);
+            return result ?? "";
         }
 
         // ─────────────────────────────────────────────────────────────────

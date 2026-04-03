@@ -146,7 +146,7 @@ namespace EvDataExporter
             // ── Fill BinNum + derived fields ──────────────────────────────
             foreach (var row in rows)
             {
-                row.BinNum = await _mssqlLookup.GetCassetteNoAsync(row.DrugCd);
+                row.BinNum = _mssqlLookup.GetCached(row.DrugCd);
                 row.UpdateDate = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
                 ApplyDerivedFields(row);
             }
