@@ -9,6 +9,12 @@ namespace EvDataExporter
     ///   WHERE vc_DrugCd = f_orderitemcode
     ///   → SELECT ln_CassetteNo
     ///
+    /// Auth logic:
+    ///   - ถ้ามี MssqlUser + MssqlPassword → ใช้ SQL Authentication เสมอ
+    ///     (แม้ MssqlTrustedConnection=true ก็ตาม เพราะ Integrated Auth ใช้กับ
+    ///      remote server ที่ไม่ได้อยู่ใน domain เดียวกันไม่ได้)
+    ///   - ถ้าไม่มี User/Password → ใช้ Integrated Authentication
+    ///
     /// Cache ผลลัพธ์ไว้ใน Dictionary เพื่อไม่ query ซ้ำสำหรับยาเดิม
     /// </summary>
     public class MssqlLookup : IDisposable
@@ -40,18 +46,36 @@ namespace EvDataExporter
                 TrustServerCertificate = true
             };
 
-            if (config.MssqlTrustedConnection)
+            // ── Auth: SQL Auth มีความสำคัญกว่า TrustedConnection ──────────
+            // ถ้ามี User + Password → ใช้ SQL Auth เสมอ
+            // (Integrated Auth ใช้ได้เฉพาะ local domain เท่านั้น)
+            bool hasSqlCredentials = !string.IsNullOrWhiteSpace(config.MssqlUser)
+                                  && !string.IsNullOrWhiteSpace(config.MssqlPassword);
+
+            if (hasSqlCredentials)
+            {
+                builder.IntegratedSecurity = false;
+                builder.UserID = config.MssqlUser;
+                builder.Password = config.MssqlPassword;
+                Logger.Info("MssqlLookup — using SQL Authentication");
+            }
+            else if (config.MssqlTrustedConnection)
             {
                 builder.IntegratedSecurity = true;
+                Logger.Info("MssqlLookup — using Windows Integrated Authentication");
             }
             else
             {
-                builder.UserID = config.MssqlUser;
-                builder.Password = config.MssqlPassword;
+                // ไม่มีทั้ง credentials และ TrustedConnection → SQL Auth ว่าง
+                // จะ fail ที่ connect แต่ log ให้รู้
+                builder.IntegratedSecurity = false;
+                Logger.Warning("MssqlLookup — no credentials and TrustedConnection=false");
             }
 
             _connectionString = builder.ConnectionString;
-            Logger.Info($"MssqlLookup created — Server={config.MssqlServer}, DB={config.MssqlDatabase}");
+            Logger.Info($"MssqlLookup created — Server={config.MssqlServer}, " +
+                        $"DB={config.MssqlDatabase}, " +
+                        $"Auth={(hasSqlCredentials ? "SQL" : config.MssqlTrustedConnection ? "Windows" : "none")}");
         }
 
         // ─────────────────────────────────────────────────────────────────
@@ -108,10 +132,9 @@ namespace EvDataExporter
             try
             {
                 using var cmd = _conn.CreateCommand();
-                // ปรับ table name ตามจริงของ MSSQL database
                 cmd.CommandText =
                     $"SELECT TOP 1 ln_CassetteNo " +
-                    $"FROM [{_mssqlDatabase}].[dbo].[tb_drug_cassette] " +
+                    $"FROM [{_mssqlDatabase}].[dbo].[M_Cassette] " +
                     $"WHERE vc_DrugCd = @drugCd";
                 cmd.Parameters.AddWithValue("@drugCd", drugCd);
 
@@ -127,7 +150,7 @@ namespace EvDataExporter
             catch (Exception ex)
             {
                 Logger.Error($"MssqlLookup.GetCassetteNoAsync — failed for DrugCd={drugCd}", ex);
-                _cache[drugCd] = "";   // cache miss เพื่อไม่ retry ซ้ำ
+                _cache[drugCd] = "";
                 return "";
             }
         }
@@ -142,7 +165,6 @@ namespace EvDataExporter
             if (_conn is null || _conn.State != System.Data.ConnectionState.Open)
                 return;
 
-            // กรองเฉพาะที่ยังไม่มีใน cache
             var toFetch = drugCds
                 .Where(d => !string.IsNullOrWhiteSpace(d) && !_cache.ContainsKey(d))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -159,8 +181,8 @@ namespace EvDataExporter
 
                 using var cmd = _conn.CreateCommand();
                 cmd.CommandText =
-                    $"SELECT vc_DrugCd, ln_CassetteNo " +
-                    $"FROM [{_mssqlDatabase}].[dbo].[tb_drug_cassette] " +
+                    $"SELECT vc_DrugCd,ln_CassetteNo " +
+                    $"FROM [{_mssqlDatabase}].[dbo].[M_Cassette] " +
                     $"WHERE vc_DrugCd IN ({inList})";
 
                 using var reader = await cmd.ExecuteReaderAsync();
@@ -172,7 +194,6 @@ namespace EvDataExporter
                         _cache[drugCd] = cassetteNo;
                 }
 
-                // DrugCd ที่ไม่พบใน DB ก็ cache เป็น "" เพื่อไม่ query ซ้ำ
                 foreach (var d in toFetch.Where(d => !_cache.ContainsKey(d)))
                     _cache[d] = "";
 

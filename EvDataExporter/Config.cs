@@ -31,6 +31,10 @@ namespace EvDataExporter
         // ── Export config ────────────────────────────────────────────────
         public string SaveFolder { get; private set; } = "";
 
+        // ── Default SaveFolder = [exe]\Exportcsv ─────────────────────────
+        public static string DefaultSaveFolder =>
+            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Exportcsv");
+
         // ── Validation ───────────────────────────────────────────────────
         public bool IsValid { get; private set; }
         public List<ConfigError> Errors { get; private set; } = new();
@@ -90,8 +94,11 @@ namespace EvDataExporter
             MssqlTrustedConnection = Get(pairs, "MssqlTrustedConnection")
                                         .Equals("true", StringComparison.OrdinalIgnoreCase);
 
-            // ── Export ───────────────────────────────────────────────────
-            SaveFolder = Get(pairs, "SaveFolder");
+            // ── Export: ถ้า SaveFolder ว่างใน config → ใช้ default ───────
+            var rawSaveFolder = Get(pairs, "SaveFolder");
+            SaveFolder = string.IsNullOrWhiteSpace(rawSaveFolder)
+                ? DefaultSaveFolder
+                : rawSaveFolder;
 
             // ── Validate MySQL (required) ────────────────────────────────
             ValidateRequired(ConfigSection.Database, "Server", DbServer);
@@ -106,7 +113,8 @@ namespace EvDataExporter
                 ValidateRequired(ConfigSection.MssqlLookup, "MssqlUser", MssqlUser);
 
             // ── Validate Export ──────────────────────────────────────────
-            ValidateSaveFolder(SaveFolder);
+            // SaveFolder มีค่า default เสมอ จึง validate path chars เท่านั้น
+            ValidateSaveFolderChars(SaveFolder);
 
             IsValid = Errors.Count == 0;
         }
@@ -142,14 +150,9 @@ namespace EvDataExporter
                     $"Port '{portStr}' ไม่ถูกต้อง (1–65535)"));
         }
 
-        private void ValidateSaveFolder(string folder)
+        /// <summary>ตรวจเฉพาะอักขระผิด — ไม่บังคับให้ตั้งค่า (มี default แล้ว)</summary>
+        private void ValidateSaveFolderChars(string folder)
         {
-            if (string.IsNullOrWhiteSpace(folder))
-            {
-                Errors.Add(new ConfigError(
-                    ConfigSection.Export, "SaveFolder", "ต้องระบุ SaveFolder"));
-                return;
-            }
             char[] invalid = Path.GetInvalidPathChars();
             if (folder.Any(c => invalid.Contains(c)))
                 Errors.Add(new ConfigError(
@@ -162,7 +165,7 @@ namespace EvDataExporter
             => d.TryGetValue(key, out var v) ? v : def;
 
         // ─────────────────────────────────────────────────────────────────
-        private static string DefaultTemplate() => """
+        private string DefaultTemplate() => $"""
             ; EV Data Exporter - config.ini
 
             ; ── MySQL Source ────────────────────────────────────────────────────────────
@@ -179,7 +182,8 @@ namespace EvDataExporter
             ; MssqlTrustedConnection=true
 
             ; ── Export settings ──────────────────────────────────────────────────────
-            SaveFolder=C:\EV_Data;
+            ; ถ้าไม่ตั้งค่า SaveFolder จะใช้ {DefaultSaveFolder} เป็น default
+            SaveFolder={DefaultSaveFolder};
             """;
     }
 

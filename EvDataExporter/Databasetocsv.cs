@@ -421,7 +421,7 @@ namespace EvDataExporter
                 f_frequencycode         AS FreqDescCd,
                 f_frequencydesc         AS FreqDesc1,
                 f_seq                   AS ItemNo,
-                f_priority              AS Raw_f_priority,
+                f_prioritycode          AS Raw_f_priority,
                 f_aux_local_memo        AS Raw_f_aux_local_memo,
                 f_qr_code               AS PreBarCd1,
                 f_noteprocessing        AS Raw_f_noteprocessing,

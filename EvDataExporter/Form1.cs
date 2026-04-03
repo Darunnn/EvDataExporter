@@ -12,6 +12,10 @@ namespace EvDataExporter
         private bool _running = false;
         private CancellationTokenSource _cts = new();
 
+        // ── Default SaveFolder = [exe]\Exportcsv ─────────────────────────
+        private static readonly string _defaultSaveFolder =
+            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Exportcsv");
+
         // ─────────────────────────────────────────────────────────────────
         public EvDataExporter()
         {
@@ -108,6 +112,13 @@ namespace EvDataExporter
             _config.CreateDefault();
             _config.LoadAndValidate();
 
+            // ── ถ้า SaveFolder ว่าง → ใช้ default [exe]\Exportcsv ─────────
+            // (เฉพาะตอนที่ config valid แต่ SaveFolder ไม่ได้ตั้ง ให้ fallback)
+            // เนื่องจาก Config.LoadAndValidate จะ error ถ้า SaveFolder ว่าง
+            // จึง patch ก่อน validate ไม่ได้ — ใช้วิธีสร้าง default template
+            // ที่มีค่า SaveFolder อยู่แล้ว แต่ถ้า user ลบออกไป ให้แสดง path default
+            // ใน UI เท่านั้น (ไม่บังคับเขียน config)
+
             if (!_config.IsValid)
             {
                 var msg = _config.ErrorSummary();
@@ -119,15 +130,22 @@ namespace EvDataExporter
                 return;
             }
 
+            // ── ถ้า SaveFolder ในconfig ว่าง ใช้ค่า default ───────────────
+            // (กรณีนี้จะไม่เกิดเพราะ Validate บังคับ แต่เผื่อมีการแก้ Validate)
+            var saveFolder = string.IsNullOrWhiteSpace(_config.SaveFolder)
+                ? _defaultSaveFolder
+                : _config.SaveFolder;
+
             Logger.Info($"Config loaded — MySQL={_config.DbServer}/{_config.DbName} | " +
-                        $"MSSQL={_config.MssqlServer}/{_config.MssqlDatabase} | MachineNo=11 (hardcoded)");
+                        $"MSSQL={_config.MssqlServer}/{_config.MssqlDatabase} | " +
+                        $"SaveFolder={saveFolder}");
 
             // ── แสดงค่าใน UI ──────────────────────────────────────────────
-            txtSourceServer.Text = _config.DbServer;
-            txtSourceDb.Text = _config.DbName;
-            txtOutputServer.Text = _config.MssqlServer;   // แสดง MSSQL server
-            txtOutputDb.Text = _config.MssqlDatabase; // แสดง MSSQL database
-            txtSavePath.Text = _config.SaveFolder;
+            txtSourceServer.Text = _config.DbServer;       // MySQL server
+            txtSourceDb.Text = _config.DbName;             // MySQL database
+            txtOutputServer.Text = _config.MssqlServer;    // MSSQL server
+            txtOutputDb.Text = _config.MssqlDatabase;      // MSSQL database
+            txtSavePath.Text = saveFolder;
 
             // ── Test MySQL connection ─────────────────────────────────────
             Logger.Info("Testing MySQL connection...");
@@ -171,6 +189,81 @@ namespace EvDataExporter
         }
 
         // ─────────────────────────────────────────────────────────────────
+        //  Browse folder
+        // ─────────────────────────────────────────────────────────────────
+        private void OnBrowseClick(object? sender, EventArgs e)
+        {
+            using var dlg = new FolderBrowserDialog
+            {
+                Description = "เลือก folder สำหรับเก็บไฟล์ CSV",
+                UseDescriptionForTitle = true,
+                // เปิด dialog ที่ path ปัจจุบันก่อน (ถ้ามี)
+                InitialDirectory = Directory.Exists(txtSavePath.Text)
+                    ? txtSavePath.Text
+                    : AppDomain.CurrentDomain.BaseDirectory
+            };
+
+            if (dlg.ShowDialog() == DialogResult.OK)
+            {
+                var selected = dlg.SelectedPath;
+                txtSavePath.Text = selected;
+
+                // ── อัปเดต SaveFolder ใน config และ Databasetocsv ──────────
+                // เขียนลง config.ini ทันทีเพื่อให้ถาวร
+                SaveFolderToConfig(selected);
+
+                Logger.Info($"SaveFolder changed to: {selected}");
+            }
+        }
+
+        /// <summary>
+        /// เขียน SaveFolder ที่ user เลือกลง config.ini
+        /// (แทนที่บรรทัด SaveFolder= เดิม)
+        /// </summary>
+        private void SaveFolderToConfig(string newFolder)
+        {
+            try
+            {
+                if (!File.Exists(_config.IniPath)) return;
+
+                var lines = File.ReadAllLines(_config.IniPath, System.Text.Encoding.UTF8);
+                bool found = false;
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    var trimmed = lines[i].Trim();
+                    if (trimmed.StartsWith("SaveFolder", StringComparison.OrdinalIgnoreCase)
+                        && trimmed.Contains('='))
+                    {
+                        lines[i] = $"SaveFolder={newFolder};";
+                        found = true;
+                        break;
+                    }
+                }
+
+                if (!found)
+                {
+                    // ถ้าไม่มีบรรทัด SaveFolder เลย → append ต่อท้าย
+                    var list = lines.ToList();
+                    list.Add($"SaveFolder={newFolder};");
+                    lines = list.ToArray();
+                }
+
+                File.WriteAllLines(_config.IniPath, lines, new System.Text.UTF8Encoding(false));
+
+                // reload config เพื่ออัปเดต _config.SaveFolder
+                _config.LoadAndValidate();
+
+                Logger.Info($"config.ini updated — SaveFolder={newFolder}");
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("SaveFolderToConfig failed", ex);
+                MessageBox.Show($"ไม่สามารถบันทึก SaveFolder ได้\n{ex.Message}",
+                    "Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────
         //  Start / Stop
         // ─────────────────────────────────────────────────────────────────
         private async void OnToggleClick(object? sender, EventArgs e)
@@ -189,11 +282,9 @@ namespace EvDataExporter
             Logger.Info("Export service started — opening connections...");
             try
             {
-                // MySQL
                 await _db!.OpenAsync();
                 Logger.Info("MySQL connection opened");
 
-                // MSSQL Lookup
                 await _mssqlLookup!.OpenAsync();
                 Logger.Info("MSSQL Lookup connection opened");
             }
