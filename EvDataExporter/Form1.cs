@@ -9,7 +9,9 @@ namespace EvDataExporter
         private MssqlLookup? _mssqlLookup = null;
 
         private System.Timers.Timer? _timer;
+        private System.Timers.Timer? _healthTimer;   // ← health-check ทุก 10s
         private bool _running = false;
+        private bool _autoMode = false;              // ← true = ระบบอยู่ใน auto mode
         private CancellationTokenSource _cts = new();
 
         // ── Default SaveFolder = [exe]\Exportcsv ─────────────────────────
@@ -79,6 +81,9 @@ namespace EvDataExporter
 
         private async Task InitConfigAndConnectAsync()
         {
+            // ── หยุด health-check เดิมก่อน ───────────────────────────────
+            StopHealthTimer();
+
             // ── ทำความสะอาด instance เดิม ─────────────────────────────────
             _db?.Dispose();
             _db = null;
@@ -91,13 +96,6 @@ namespace EvDataExporter
             _config.CreateDefault();
             _config.LoadAndValidate();
 
-            // ── ถ้า SaveFolder ว่าง → ใช้ default [exe]\Exportcsv ─────────
-            // (เฉพาะตอนที่ config valid แต่ SaveFolder ไม่ได้ตั้ง ให้ fallback)
-            // เนื่องจาก Config.LoadAndValidate จะ error ถ้า SaveFolder ว่าง
-            // จึง patch ก่อน validate ไม่ได้ — ใช้วิธีสร้าง default template
-            // ที่มีค่า SaveFolder อยู่แล้ว แต่ถ้า user ลบออกไป ให้แสดง path default
-            // ใน UI เท่านั้น (ไม่บังคับเขียน config)
-
             if (!_config.IsValid)
             {
                 var msg = _config.ErrorSummary();
@@ -109,8 +107,6 @@ namespace EvDataExporter
                 return;
             }
 
-            // ── ถ้า SaveFolder ในconfig ว่าง ใช้ค่า default ───────────────
-            // (กรณีนี้จะไม่เกิดเพราะ Validate บังคับ แต่เผื่อมีการแก้ Validate)
             var saveFolder = string.IsNullOrWhiteSpace(_config.SaveFolder)
                 ? _defaultSaveFolder
                 : _config.SaveFolder;
@@ -120,23 +116,21 @@ namespace EvDataExporter
                         $"SaveFolder={saveFolder}");
 
             // ── แสดงค่าใน UI ──────────────────────────────────────────────
-            txtSourceServer.Text = _config.DbServer;       // MySQL server
-            txtSourceDb.Text = _config.DbName;             // MySQL database
-            txtOutputServer.Text = _config.MssqlServer;    // MSSQL server
-            txtOutputDb.Text = _config.MssqlDatabase;      // MSSQL database
+            txtSourceServer.Text = _config.DbServer;
+            txtSourceDb.Text = _config.DbName;
+            txtOutputServer.Text = _config.MssqlServer;
+            txtOutputDb.Text = _config.MssqlDatabase;
             txtSavePath.Text = saveFolder;
 
-            // ── Test MySQL connection ─────────────────────────────────────
+            // ── Test connections ──────────────────────────────────────────
             Logger.Info("Testing MySQL connection...");
             _mssqlLookup = new MssqlLookup(_config);
             _db = new Databasetocsv(_config, _mssqlLookup, picSourceStatus, picDot, lblStatus);
             await _db.TestConnectionAsync();
 
-            // ── Test MSSQL connection ─────────────────────────────────────
             Logger.Info("Testing MSSQL connection...");
             bool mssqlOk = await _mssqlLookup.TestConnectionAsync();
 
-            // ── แสดงสถานะ MSSQL dot ───────────────────────────────────────
             var mssqlColor = mssqlOk
                 ? Color.FromArgb(52, 199, 89)
                 : Color.FromArgb(255, 69, 58);
@@ -145,16 +139,174 @@ namespace EvDataExporter
             if (!mssqlOk)
                 Logger.Warning("MSSQL connection FAILED — BinNum (field 42) จะเป็นค่าว่าง");
 
-            // ── Enable Start เมื่อ MySQL พร้อม (MSSQL แค่ warn ไม่บล็อก) ──
             btnToggle.Enabled = _db.IsConnected;
 
-            if (_db.IsConnected)
-                Logger.Info("MySQL OK — ready to export");
+            // ── Auto-start เมื่อทั้ง 2 DB พร้อม ──────────────────────────
+            if (_db.IsConnected && mssqlOk)
+            {
+                Logger.Info("Both databases connected — auto-starting export service...");
+                SetStatus("Both databases OK — auto-starting…");
+                _autoMode = true;
+                await StartAsync();
+            }
             else
-                Logger.Error("MySQL FAILED — ตรวจสอบ config.ini");
+            {
+                Logger.Info("One or more databases not ready — waiting for connections...");
+                SetStatus(_db.IsConnected
+                    ? "MySQL OK · MSSQL failed — waiting to reconnect…"
+                    : "MySQL failed — waiting to reconnect…");
+
+                // ── เริ่ม health-check เพื่อรอ reconnect ──────────────────
+                _autoMode = true;
+                StartHealthTimer();
+            }
         }
 
-        // ── Helper: paint dot จาก Form (ไม่ผ่าน Databasetocsv) ──────────
+        // ─────────────────────────────────────────────────────────────────
+        //  Health Check Timer (ทุก 10 วินาที)
+        // ─────────────────────────────────────────────────────────────────
+        private void StartHealthTimer()
+        {
+            if (_healthTimer != null) return;
+
+            _healthTimer = new System.Timers.Timer(10_000);
+            _healthTimer.Elapsed += OnHealthCheckElapsed;
+            _healthTimer.AutoReset = true;
+            _healthTimer.Start();
+            Logger.Info("Health-check timer started (interval: 10s)");
+        }
+
+        private void StopHealthTimer()
+        {
+            if (_healthTimer == null) return;
+            _healthTimer.Stop();
+            _healthTimer.Dispose();
+            _healthTimer = null;
+            Logger.Info("Health-check timer stopped");
+        }
+
+        private async void OnHealthCheckElapsed(object? sender, ElapsedEventArgs e)
+        {
+            if (!_autoMode) return;
+
+            bool mysqlOk = await CheckMysqlAsync();
+            bool mssqlOk = await CheckMssqlAsync();
+
+            // ── อัปเดต UI dot ─────────────────────────────────────────────
+            UpdateStatusDots(mysqlOk, mssqlOk);
+
+            if (_running)
+            {
+                // ── กำลัง run อยู่ → ถ้า DB ใดตัด → auto-stop ────────────
+                if (!mysqlOk || !mssqlOk)
+                {
+                    var who = !mysqlOk ? "MySQL" : "MSSQL";
+                    Logger.Warning($"Health-check: {who} disconnected — auto-stopping...");
+                    InvokeIfNeeded(() => SetStatus($"{who} disconnected — stopping…"));
+                    Stop();
+                }
+            }
+            else
+            {
+                // ── หยุดอยู่ → ถ้า DB กลับมาครบทั้งคู่ → auto-start ───────
+                if (mysqlOk && mssqlOk)
+                {
+                    Logger.Info("Health-check: Both databases back — auto-restarting...");
+                    InvokeIfNeeded(() => SetStatus("Both databases reconnected — restarting…"));
+
+                    // ต้อง re-init เพื่อสร้าง connection object ใหม่
+                    await InvokeAsync(async () =>
+                    {
+                        await ReopenConnectionsAndStartAsync();
+                    });
+                }
+                else
+                {
+                    var statusMsg = mysqlOk
+                        ? "MySQL OK · MSSQL offline — waiting…"
+                        : mssqlOk
+                            ? "MSSQL OK · MySQL offline — waiting…"
+                            : "Both databases offline — waiting…";
+                    InvokeIfNeeded(() => SetStatus(statusMsg));
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        //  Ping helpers (ไม่ใช้ connection หลัก — เปิดชั่วคราว)
+        // ─────────────────────────────────────────────────────────────────
+        private async Task<bool> CheckMysqlAsync()
+        {
+            try
+            {
+                using var c = new MySql.Data.MySqlClient.MySqlConnection(
+                    _db?.ConnectionString ?? "");
+                await c.OpenAsync();
+                return c.State == System.Data.ConnectionState.Open;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private async Task<bool> CheckMssqlAsync()
+        {
+            if (_mssqlLookup == null) return false;
+            return await _mssqlLookup.TestConnectionAsync();
+        }
+
+        private void UpdateStatusDots(bool mysqlOk, bool mssqlOk)
+        {
+            var green = Color.FromArgb(52, 199, 89);
+            var red = Color.FromArgb(255, 69, 58);
+
+            InvokeIfNeeded(() =>
+            {
+                PaintDotPublic(picSourceStatus, mysqlOk ? green : red);
+                PaintDotPublic(picOutputStatus, mssqlOk ? green : red);
+                PaintDotPublic(picDot, (mysqlOk && mssqlOk) ? green : red);
+            });
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        //  Reopen connections แล้ว start (ใช้ตอน reconnect)
+        // ─────────────────────────────────────────────────────────────────
+        private async Task ReopenConnectionsAndStartAsync()
+        {
+            try
+            {
+                // dispose ของเก่า แล้วสร้างใหม่
+                _db?.Dispose();
+                _mssqlLookup?.Dispose();
+
+                _mssqlLookup = new MssqlLookup(_config);
+                _db = new Databasetocsv(
+                    _config, _mssqlLookup,
+                    picSourceStatus, picDot, lblStatus);
+
+                await StartAsync();
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("ReopenConnectionsAndStartAsync failed", ex);
+                SetStatus($"Reconnect error: {ex.Message}");
+            }
+        }
+
+        // ── Helper: Invoke async lambda บน UI thread ─────────────────────
+        private Task InvokeAsync(Func<Task> action)
+        {
+            var tcs = new TaskCompletionSource();
+            InvokeIfNeeded(async () =>
+            {
+                try { await action(); tcs.SetResult(); }
+                catch (Exception ex) { tcs.SetException(ex); }
+            });
+            return tcs.Task;
+        }
+
+        // ── Helper: paint dot จาก Form ───────────────────────────────────
         private static void PaintDotPublic(PictureBox pic, Color color)
         {
             if (pic.InvokeRequired) { pic.Invoke(() => PaintDotPublic(pic, color)); return; }
@@ -176,7 +328,6 @@ namespace EvDataExporter
             {
                 Description = "เลือก folder สำหรับเก็บไฟล์ CSV",
                 UseDescriptionForTitle = true,
-                // เปิด dialog ที่ path ปัจจุบันก่อน (ถ้ามี)
                 InitialDirectory = Directory.Exists(txtSavePath.Text)
                     ? txtSavePath.Text
                     : AppDomain.CurrentDomain.BaseDirectory
@@ -186,19 +337,11 @@ namespace EvDataExporter
             {
                 var selected = dlg.SelectedPath;
                 txtSavePath.Text = selected;
-
-                // ── อัปเดต SaveFolder ใน config และ Databasetocsv ──────────
-                // เขียนลง config.ini ทันทีเพื่อให้ถาวร
                 SaveFolderToConfig(selected);
-
                 Logger.Info($"SaveFolder changed to: {selected}");
             }
         }
 
-        /// <summary>
-        /// เขียน SaveFolder ที่ user เลือกลง config.ini
-        /// (แทนที่บรรทัด SaveFolder= เดิม)
-        /// </summary>
         private void SaveFolderToConfig(string newFolder)
         {
             try
@@ -221,17 +364,14 @@ namespace EvDataExporter
 
                 if (!found)
                 {
-                    // ถ้าไม่มีบรรทัด SaveFolder เลย → append ต่อท้าย
                     var list = lines.ToList();
                     list.Add($"SaveFolder={newFolder};");
                     lines = list.ToArray();
                 }
 
-                File.WriteAllLines(_config.IniPath, lines, new System.Text.UTF8Encoding(false));
-
-                // reload config เพื่ออัปเดต _config.SaveFolder
+                File.WriteAllLines(_config.IniPath, lines,
+                    new System.Text.UTF8Encoding(false));
                 _config.LoadAndValidate();
-
                 Logger.Info($"config.ini updated — SaveFolder={newFolder}");
             }
             catch (Exception ex)
@@ -243,20 +383,35 @@ namespace EvDataExporter
         }
 
         // ─────────────────────────────────────────────────────────────────
-        //  Start / Stop
+        //  Start / Stop (manual หรือ auto)
         // ─────────────────────────────────────────────────────────────────
         private async void OnToggleClick(object? sender, EventArgs e)
         {
-            if (!_running) await StartAsync();
-            else Stop();
+            if (!_running)
+            {
+                // Manual start → ปิด auto mode เพื่อไม่ให้ health-check บังคับ stop
+                _autoMode = false;
+                StopHealthTimer();
+                await ReopenConnectionsAndStartAsync();
+            }
+            else
+            {
+                // Manual stop → ปิด auto mode ด้วย
+                _autoMode = false;
+                StopHealthTimer();
+                Stop();
+            }
         }
 
         private async Task StartAsync()
         {
             _running = true;
             _cts = new CancellationTokenSource();
-            btnToggle.Text = "⏹  Stop";
-            btnToggle.BackColor = Color.FromArgb(200, 60, 50);
+            InvokeIfNeeded(() =>
+            {
+                btnToggle.Text = "⏹  Stop";
+                btnToggle.BackColor = Color.FromArgb(200, 60, 50);
+            });
 
             Logger.Info("Export service started — opening connections...");
             try
@@ -270,7 +425,7 @@ namespace EvDataExporter
             catch (Exception ex)
             {
                 Logger.Error("Failed to open connection on Start", ex);
-                SetStatus($"Error: {ex.Message}");
+                InvokeIfNeeded(() => SetStatus($"Error: {ex.Message}"));
                 Stop();
                 return;
             }
@@ -282,6 +437,9 @@ namespace EvDataExporter
             _timer.AutoReset = true;
             _timer.Start();
             Logger.Info("Export timer started (interval: 30s)");
+
+            // ── เริ่ม health-check เฉพาะ auto mode ───────────────────────
+            if (_autoMode) StartHealthTimer();
         }
 
         private void Stop()
@@ -297,8 +455,11 @@ namespace EvDataExporter
             {
                 btnToggle.Text = "▶  Start";
                 btnToggle.BackColor = Color.FromArgb(24, 95, 165);
-                SetStatus("Stopped");
+                SetStatus(_autoMode ? "DB disconnected — waiting to reconnect…" : "Stopped");
             });
+
+            // ── ถ้า auto mode → health-check ยังทำงานเพื่อรอ reconnect ───
+            if (_autoMode) StartHealthTimer();
         }
 
         // ─────────────────────────────────────────────────────────────────
@@ -355,6 +516,10 @@ namespace EvDataExporter
             try
             {
                 Logger.Info("Opening config.ini in Notepad...");
+
+                // หยุดทุกอย่างก่อนเปิด settings
+                _autoMode = false;
+                StopHealthTimer();
                 if (_running) Stop();
 
                 var proc = System.Diagnostics.Process.Start("notepad.exe", _config.IniPath);
@@ -366,7 +531,8 @@ namespace EvDataExporter
             catch (Exception ex)
             {
                 Logger.Error("Settings error", ex);
-                MessageBox.Show(ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(ex.Message, "Error",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
