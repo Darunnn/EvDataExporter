@@ -44,6 +44,7 @@ namespace EvDataExporter
         protected override void OnResize(EventArgs e)
         {
             base.OnResize(e);
+
             if (WindowState == FormWindowState.Minimized)
             {
                 Hide();
@@ -63,30 +64,8 @@ namespace EvDataExporter
 
         private void OnExit(object? sender, EventArgs e)
         {
-            Logger.Info("Application exit by user");
-            Stop();
             notifyIcon1.Visible = false;
             Application.Exit();
-        }
-
-        protected override void OnFormClosing(FormClosingEventArgs e)
-        {
-            base.OnFormClosing(e);
-            if (e.CloseReason == CloseReason.UserClosing)
-            {
-                e.Cancel = true;
-                Hide();
-                ShowInTaskbar = false;
-                notifyIcon1.Visible = true;
-                notifyIcon1.ShowBalloonTip(2000, "EvDataExporter",
-                    "โปรแกรมยังทำงานอยู่ใน system tray", ToolTipIcon.Info);
-                Logger.Info("Minimized to system tray");
-            }
-            else
-            {
-                Logger.Info("Application closing");
-                Stop();
-            }
         }
 
         // ─────────────────────────────────────────────────────────────────
