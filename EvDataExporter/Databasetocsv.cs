@@ -292,7 +292,13 @@ namespace EvDataExporter
         // ─────────────────────────────────────────────────────────────────
         //  Helpers
         // ─────────────────────────────────────────────────────────────────
-
+        private static string FormatDate(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return "";
+            return DateTime.TryParse(raw, out var dt)
+                ? dt.ToString("yyyyMMdd")
+                : raw;
+        }
         /// <summary>คำนวณอายุ (ปี) จาก datestring → string  ถ้าไม่ได้ → ""</summary>
         private static string CalcAge(string dob)
         {
@@ -436,7 +442,7 @@ namespace EvDataExporter
             PatientID = Col(r, "PatientID"),
             PatientName = Col(r, "PatientName"),
             HkId = Col(r, "HkId"),
-            BirthDay = Col(r, "BirthDay"),
+            BirthDay = FormatDate(Col(r, "BirthDay")),
             Raw_f_patientdob = Col(r, "Raw_f_patientdob"),
             Sex = Col(r, "Sex"),
             Raw_f_io_flag = Col(r, "Raw_f_io_flag"),
