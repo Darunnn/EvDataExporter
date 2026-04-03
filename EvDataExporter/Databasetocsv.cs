@@ -7,13 +7,15 @@ namespace EvDataExporter
     /// จัดการ MySQL connection และ export CSV
     /// ตาราง: db_thanes_conhis_system_nonthavej.tb_thaneshos_middle
     ///
-    /// CSV spec:
+    /// CSV spec (56 fields ตาม Data Dictionary):
     ///   Encode  : UTF-8 (no BOM)
     ///   Header  : ไม่มี
     ///   Quote   : ทุก field ครอบด้วย "…"
     ///   " ใน value → ""
-    ///   Newline ใน mass-print field (CautionMsg, WarningMsg1-6) → *\n
+    ///   Newline → *\n
     ///   CRLF ท้ายบรรทัด
+    ///
+    /// BinNum (field 42) : lookup จาก MSSQL ผ่าน MssqlLookup
     ///
     /// ชื่อไฟล์: YYYYMMDD_HHMMSS_SeqNo_PrescriptionNo.csv
     /// </summary>
@@ -23,7 +25,6 @@ namespace EvDataExporter
 
         public string ConnectionString { get; }
         public string SaveFolder { get; }
-        public string MachineNo { get; }
         public bool IsConnected { get; private set; }
 
         private int _seqNo = 0;
@@ -33,6 +34,9 @@ namespace EvDataExporter
         private readonly PictureBox _picDot;
         private readonly Label _lblStatus;
 
+        // ── MSSQL Lookup สำหรับ BinNum (field 42) ────────────────────────
+        private readonly MssqlLookup _mssqlLookup;
+
         private static readonly Color _green = Color.FromArgb(52, 199, 89);
         private static readonly Color _red = Color.FromArgb(255, 69, 58);
 
@@ -40,13 +44,17 @@ namespace EvDataExporter
 
         // ─────────────────────────────────────────────────────────────────
         public Databasetocsv(
-            Config config, PictureBox picStatus, PictureBox picDot, Label lblStatus)
+            Config config,
+            MssqlLookup mssqlLookup,
+            PictureBox picStatus,
+            PictureBox picDot,
+            Label lblStatus)
         {
             if (!config.IsValid)
                 throw new InvalidOperationException("Config ยังไม่ผ่าน validation");
 
             SaveFolder = config.SaveFolder;
-            MachineNo = config.MachineNo;
+            _mssqlLookup = mssqlLookup;
             _picStatus = picStatus;
             _picDot = picDot;
             _lblStatus = lblStatus;
@@ -62,7 +70,7 @@ namespace EvDataExporter
                 CharacterSet = "utf8mb4"
             }.ConnectionString;
 
-            Logger.Info($"Databasetocsv created — SaveFolder={SaveFolder}, MachineNo={MachineNo}");
+            Logger.Info($"Databasetocsv created — SaveFolder={SaveFolder}");
         }
 
         // ─────────────────────────────────────────────────────────────────
@@ -106,61 +114,74 @@ namespace EvDataExporter
         public async Task<int> ExportCsvAsync(
             IProgress<(int exported, int total)>? progress = null)
         {
-            Logger.Info($"ExportCsvAsync — querying pending records (MachineNo={MachineNo})...");
+            Logger.Info("ExportCsvAsync — querying pending records (MachineNo=11)...");
 
             int total;
             using (var cnt = Conn.CreateCommand())
             {
                 cnt.CommandText =
                     $"SELECT COUNT(*) FROM {_sourceDb}.tb_thaneshos_middle " +
-                    $"WHERE f_tomachineno = @mn AND f_dispensestatus_ev = 0";
-                cnt.Parameters.AddWithValue("@mn", MachineNo);
+                    $"WHERE f_tomachineno = '11' AND f_dispensestatus_ev = 0";
                 total = Convert.ToInt32(await cnt.ExecuteScalarAsync());
             }
 
             Logger.Info($"ExportCsvAsync — pending records: {total}");
             if (total == 0) return 0;
 
+            // ── อ่าน records ทั้งหมดก่อน เพื่อ prefetch BinNum ทีเดียว ──
+            var rows = new List<TbThaneshosMiddle>();
+            using (var cmd = Conn.CreateCommand())
+            {
+                cmd.CommandText = BuildSelectQuery();
+
+                using var reader = await cmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                    rows.Add(MapRow(reader));
+            }
+
+            // ── Prefetch BinNum จาก MSSQL ทีเดียว (1 round-trip) ─────────
+            var drugCds = rows.Select(r => r.DrugCd).Distinct().ToList();
+            await _mssqlLookup.PrefetchAsync(drugCds);
+
+            // ── Fill BinNum + derived fields ──────────────────────────────
+            foreach (var row in rows)
+            {
+                row.BinNum = await _mssqlLookup.GetCassetteNoAsync(row.DrugCd);
+                row.UpdateDate = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                ApplyDerivedFields(row);
+            }
+
+            // ── เขียน CSV ─────────────────────────────────────────────────
             Directory.CreateDirectory(SaveFolder);
             Logger.Info($"ExportCsvAsync — SaveFolder: {SaveFolder}");
-
-            using var cmd = Conn.CreateCommand();
-            cmd.CommandText = BuildSelectQuery();
-            cmd.Parameters.AddWithValue("@mn", MachineNo);
 
             var exportedIds = new List<string>();
             int count = 0;
             var utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 
-            using (var reader = await cmd.ExecuteReaderAsync())
+            foreach (var row in rows)
             {
-                while (await reader.ReadAsync())
+                var now = DateTime.Now;
+                var filePath = BuildFilePath(now, row.PrescriptionNo);
+
+                Logger.Info($"Writing file: {Path.GetFileName(filePath)}");
+                try
                 {
-                    var row = MapRow(reader);
-                    var now = DateTime.Now;
-                    string filePath = BuildFilePath(now, row.PrescriptionNo);
+                    await using var sw = new StreamWriter(filePath, append: false, utf8NoBom);
+                    sw.NewLine = "\r\n";
+                    await sw.WriteLineAsync(ToCsvRow(row));
 
-                    Logger.Info($"Writing file: {Path.GetFileName(filePath)}");
-
-                    try
-                    {
-                        await using var sw = new StreamWriter(filePath, append: false, utf8NoBom);
-                        sw.NewLine = "\r\n";
-                        await sw.WriteLineAsync(ToCsvRow(row));
-
-                        exportedIds.Add(row.PrescriptionItemID);
-                        count++;
-                        progress?.Report((count, total));
-                    }
-                    catch (Exception ex)
-                    {
-                        Logger.Error($"Failed to write file: {filePath}", ex);
-                        // ข้ามไฟล์นี้ ไม่หยุด export ทั้งหมด
-                    }
+                    exportedIds.Add(row.PrescriptionItemID);
+                    count++;
+                    progress?.Report((count, total));
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error($"Failed to write file: {filePath}", ex);
                 }
             }
 
-            // UPDATE exported flag
+            // ── UPDATE exported flag ───────────────────────────────────────
             if (exportedIds.Count > 0)
             {
                 Logger.Info($"Updating f_dispensestatus_ev=1 for {exportedIds.Count} record(s)...");
@@ -170,7 +191,6 @@ namespace EvDataExporter
                     var batch = exportedIds.Skip(i).Take(batchSize);
                     var inList = string.Join(",",
                         batch.Select(id => $"'{id.Replace("'", "''")}'"));
-
                     try
                     {
                         using var upd = Conn.CreateCommand();
@@ -193,6 +213,262 @@ namespace EvDataExporter
         }
 
         // ─────────────────────────────────────────────────────────────────
+        //  Derived field logic (ตาม Data Dictionary)
+        // ─────────────────────────────────────────────────────────────────
+        private static void ApplyDerivedFields(TbThaneshosMiddle r)
+        {
+            // ── Field 6: Sex  (M=1, F=2) ─────────────────────────────────
+            r.Sex = r.Sex.Trim().ToUpper() switch
+            {
+                "M" => "1",
+                "F" => "2",
+                _ => r.Sex
+            };
+
+            // ── Field 7: PatCatCd  (O=1, I=2) ────────────────────────────
+            r.PatCatCd = r.Raw_f_io_flag.Trim().ToUpper() switch
+            {
+                "O" => "1",
+                "I" => "2",
+                _ => r.Raw_f_io_flag
+            };
+
+            // ── Field 8: SpecCd = อายุ คำนวณจาก f_patientdob ─────────────
+            r.SpecCd = CalcAge(r.Raw_f_patientdob);
+
+            // ── Field 9: IOFlag  (O=1, I=2) ──────────────────────────────
+            r.IOFlag = r.PatCatCd;   // ใช้ค่าเดียวกับ PatCatCd
+
+            // ── Field 23: TradeName  ห่อด้วย "(…)" ───────────────────────
+            if (!string.IsNullOrEmpty(r.TradeName))
+                r.TradeName = $"({r.TradeName})";
+
+            // ── Field 31: TicketNo  → "0001" คงที่ ───────────────────────
+            r.TicketNo = "0001";
+
+            // ── Field 32: CautionMsg  (f_priority 4,5,99 → "[HM]") ───────
+            var priority = r.Raw_f_priority.Trim();
+            r.CautionMsg = priority is "4" or "5" or "99" ? "[HM]" : "";
+
+            // ── Fields 33-38: WarningMsg1-6  split newline f_aux_local_memo
+            var warnParts = SplitNewline(r.Raw_f_aux_local_memo);
+            r.WarningMsg1 = SafeIndex(warnParts, 0);
+            r.WarningMsg2 = SafeIndex(warnParts, 1);
+            r.WarningMsg3 = SafeIndex(warnParts, 2);
+            r.WarningMsg4 = SafeIndex(warnParts, 3);
+            r.WarningMsg5 = SafeIndex(warnParts, 4);
+            r.WarningMsg6 = SafeIndex(warnParts, 5);
+
+            // ── Field 40: PrescType  → "N" คงที่ ─────────────────────────
+            r.PrescType = "N";
+
+            // ── Field 41: FdnFlag  → "true" คงที่ ────────────────────────
+            r.FdnFlag = "true";
+
+            // ── Field 43: PrintLang  → "E" คงที่ ─────────────────────────
+            r.PrintLang = "E";
+
+            // ── Field 44: PrintType  → "N" คงที่ ─────────────────────────
+            r.PrintType = "N";
+
+            // ── Field 45: PrintIntsFlag  → "true" คงที่ ──────────────────
+            r.PrintIntsFlag = "true";
+
+            // ── Field 46: PrintBarcodeFlag  → "true" คงที่ ───────────────
+            r.PrintBarcodeFlag = "true";
+
+            // ── Field 47: PrintWardReturnFlag  → "false" คงที่ ───────────
+            r.PrintWardReturnFlag = "false";
+
+            // ── Fields 52-56: Reserve1-5  split newline f_noteprocessing ─
+            var noteParts = SplitNewline(r.Raw_f_noteprocessing);
+            r.Reserve1 = SafeIndex(noteParts, 0);
+            r.Reserve2 = SafeIndex(noteParts, 1);
+            r.Reserve3 = SafeIndex(noteParts, 2);
+            r.Reserve4 = SafeIndex(noteParts, 3);
+            r.Reserve5 = SafeIndex(noteParts, 4);
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        //  Helpers
+        // ─────────────────────────────────────────────────────────────────
+
+        /// <summary>คำนวณอายุ (ปี) จาก datestring → string  ถ้าไม่ได้ → ""</summary>
+        private static string CalcAge(string dob)
+        {
+            if (string.IsNullOrWhiteSpace(dob)) return "";
+            if (!DateTime.TryParse(dob, out var birth)) return "";
+            var today = DateTime.Today;
+            int age = today.Year - birth.Year;
+            if (birth > today.AddYears(-age)) age--;
+            return age >= 0 ? age.ToString() : "";
+        }
+
+        /// <summary>Split string ด้วย newline (CRLF / LF / CR)</summary>
+        private static string[] SplitNewline(string? raw) =>
+            string.IsNullOrEmpty(raw)
+                ? Array.Empty<string>()
+                : raw.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+
+        /// <summary>ดึง index ปลอดภัย คืน "" ถ้าไม่มี</summary>
+        private static string SafeIndex(string[] arr, int idx) =>
+            idx < arr.Length ? arr[idx] : "";
+
+        // ─────────────────────────────────────────────────────────────────
+        //  CSV Row (56 fields ตาม Data Dictionary)
+        // ─────────────────────────────────────────────────────────────────
+        private static string ToCsvRow(TbThaneshosMiddle r) =>
+            string.Join(",", new[]
+            {
+                /* 01 */ Q(r.PrescriptionNo),
+                /* 02 */ Q(r.PatientID),
+                /* 03 */ Q(r.PatientName),
+                /* 04 */ Q(r.HkId),
+                /* 05 */ Q(r.BirthDay),
+                /* 06 */ Q(r.Sex),
+                /* 07 */ Q(r.PatCatCd),
+                /* 08 */ Q(r.SpecCd),
+                /* 09 */ Q(r.IOFlag),
+                /* 10 */ Q(r.HospitalCd),
+                /* 11 */ Q(r.HospitalName),
+                /* 12 */ Q(r.WorkStoreCd),
+                /* 13 */ Q(r.WorkStationCd),
+                /* 14 */ Q(r.WardCd),
+                /* 15 */ Q(r.WardName),
+                /* 16 */ Q(r.RoomNo),
+                /* 17 */ Q(r.BedNo),
+                /* 18 */ Q(r.DoctorCd),
+                /* 19 */ Q(r.DoctorName),
+                /* 20 */ Q(r.PrescriptionDate),
+                /* 21 */ Q(r.DrugCd),
+                /* 22 */ Q(r.DrugName),
+                /* 23 */ Q(r.TradeName),
+                /* 24 */ Q(r.DispensedDose),
+                /* 25 */ Q(r.DispensedUnit),
+                /* 26 */ Q(r.FormCd),
+                /* 27 */ Q(r.FreqDescCd),
+                /* 28 */ Q(r.FreqDesc1),
+                /* 29 */ Q(r.FreqDesc2),
+                /* 30 */ Q(r.ItemNo),
+                /* 31 */ Q(r.TicketNo),
+                /* 32 */ Q(r.CautionMsg),
+                /* 33 */ QMsg(r.WarningMsg1),
+                /* 34 */ QMsg(r.WarningMsg2),
+                /* 35 */ QMsg(r.WarningMsg3),
+                /* 36 */ QMsg(r.WarningMsg4),
+                /* 37 */ QMsg(r.WarningMsg5),
+                /* 38 */ QMsg(r.WarningMsg6),
+                /* 39 */ Q(r.UserCd),
+                /* 40 */ Q(r.PrescType),
+                /* 41 */ Q(r.FdnFlag),
+                /* 42 */ Q(r.BinNum),           // ← MSSQL lookup ln_CassetteNo
+                /* 43 */ Q(r.PrintLang),
+                /* 44 */ Q(r.PrintType),
+                /* 45 */ Q(r.PrintIntsFlag),
+                /* 46 */ Q(r.PrintBarcodeFlag),
+                /* 47 */ Q(r.PrintWardReturnFlag),
+                /* 48 */ Q(r.PreBarCd1),
+                /* 49 */ Q(r.PreBarCd2),
+                /* 50 */ Q(r.DeltaChangeInd),
+                /* 51 */ Q(r.UpdateDate),
+                /* 52 */ Q(r.Reserve1),
+                /* 53 */ Q(r.Reserve2),
+                /* 54 */ Q(r.Reserve3),
+                /* 55 */ Q(r.Reserve4),
+                /* 56 */ Q(r.Reserve5)
+            });
+
+        private static string Q(string? v) =>
+            $"\"{(v ?? "").Replace("\"", "\"\"")}\"";
+
+        private static string QMsg(string? v)
+        {
+            if (v is null) return "\"\"";
+            var n = v.Replace("\r\n", "*\\n").Replace("\r", "*\\n").Replace("\n", "*\\n");
+            return $"\"{n.Replace("\"", "\"\"")}\"";
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        //  SELECT query
+        // ─────────────────────────────────────────────────────────────────
+        private string BuildSelectQuery() =>
+            $@"SELECT
+                PrescriptionItemID,
+                f_prescriptionno        AS PrescriptionNo,
+                f_hn                    AS PatientID,
+                f_patientname           AS PatientName,
+                f_an                    AS HkId,
+                f_patientdob            AS BirthDay,
+                f_patientdob            AS Raw_f_patientdob,
+                f_sex                   AS Sex,
+                f_io_flag               AS Raw_f_io_flag,
+                f_pharmacylocationcode  AS WorkStoreCd,
+                f_roomcode              AS RoomNo,
+                f_doctorcode            AS DoctorCd,
+                f_doctorname            AS DoctorName,
+                f_prescriptiondate      AS PrescriptionDate,
+                f_orderitemcode         AS DrugCd,
+                f_orderitemname         AS DrugName,
+                f_orderitemnameTH       AS TradeName,
+                f_orderqty              AS DispensedDose,
+                f_orderunitcode         AS DispensedUnit,
+                f_frequencycode         AS FreqDescCd,
+                f_frequencydesc         AS FreqDesc1,
+                f_seq                   AS ItemNo,
+                f_priority              AS Raw_f_priority,
+                f_aux_local_memo        AS Raw_f_aux_local_memo,
+                f_qr_code               AS PreBarCd1,
+                f_noteprocessing        AS Raw_f_noteprocessing,
+                f_dispensestatus_ev,
+                f_tomachineno
+            FROM {_sourceDb}.tb_thaneshos_middle
+            WHERE f_tomachineno = '11'
+              AND f_dispensestatus_ev = 0
+            ORDER BY f_prescriptionno";
+
+        // ─────────────────────────────────────────────────────────────────
+        //  MapRow
+        // ─────────────────────────────────────────────────────────────────
+        private static TbThaneshosMiddle MapRow(System.Data.Common.DbDataReader r) => new()
+        {
+            PrescriptionItemID = Col(r, "PrescriptionItemID"),
+            PrescriptionNo = Col(r, "PrescriptionNo"),
+            PatientID = Col(r, "PatientID"),
+            PatientName = Col(r, "PatientName"),
+            HkId = Col(r, "HkId"),
+            BirthDay = Col(r, "BirthDay"),
+            Raw_f_patientdob = Col(r, "Raw_f_patientdob"),
+            Sex = Col(r, "Sex"),
+            Raw_f_io_flag = Col(r, "Raw_f_io_flag"),
+            WorkStoreCd = Col(r, "WorkStoreCd"),
+            WorkStationCd = Col(r, "WorkStoreCd"),   // ใช้ค่าเดิม field 12
+            RoomNo = Col(r, "RoomNo"),
+            BedNo = Col(r, "RoomNo"),         // ใช้ค่าเดิม field 16
+            DoctorCd = Col(r, "DoctorCd"),
+            DoctorName = Col(r, "DoctorName"),
+            PrescriptionDate = Col(r, "PrescriptionDate"),
+            DrugCd = Col(r, "DrugCd"),
+            DrugName = Col(r, "DrugName"),
+            TradeName = Col(r, "TradeName"),
+            DispensedDose = Col(r, "DispensedDose"),
+            DispensedUnit = Col(r, "DispensedUnit"),
+            FreqDescCd = Col(r, "FreqDescCd"),
+            FreqDesc1 = Col(r, "FreqDesc1"),
+            ItemNo = Col(r, "ItemNo"),
+            Raw_f_priority = Col(r, "Raw_f_priority"),
+            Raw_f_aux_local_memo = Col(r, "Raw_f_aux_local_memo"),
+            PreBarCd1 = Col(r, "PreBarCd1"),
+            Raw_f_noteprocessing = Col(r, "Raw_f_noteprocessing"),
+            f_tomachineno = Col(r, "f_tomachineno"),
+        };
+
+        private static string Col(System.Data.Common.DbDataReader r, string col)
+        {
+            int i = r.GetOrdinal(col);
+            return r.IsDBNull(i) ? "" : r.GetValue(i).ToString() ?? "";
+        }
+
+        // ─────────────────────────────────────────────────────────────────
         private string BuildFilePath(DateTime now, string prescriptionNo)
         {
             string today = now.ToString("yyyyMMdd");
@@ -210,130 +486,7 @@ namespace EvDataExporter
             return new string(name.Select(c => invalid.Contains(c) ? '_' : c).ToArray());
         }
 
-        // ─────────────────────────────────────────────────────────────────
-        private string BuildSelectQuery() =>
-            $@"SELECT
-                PrescriptionItemID,
-                f_prescriptionno,
-                f_hn,        f_patientname,      f_an,
-                f_patientdob,         f_sex,              f_io_flag,
-                         f_io_flag,             f_pharmacylocationcode,   
-                      f_roomcode,           f_roomcode,
-                f_doctorcode,         f_doctorname,       f_prescriptiondate,
-                f_orderitemcode,           f_orderitemname,         f_orderitemnameTH,
-                f_orderqty,    f_orderunitcode,    
-                f_frequencycode,       f_frequencydesc,      
-                f_seq,                   f_prioritycode,
-                f_aux_local_memo,     f_qr_code, f_noteprocessing, f_dispensestatus_ev
-            FROM  db_thanes_conhis_system_nonthavej.tb_thaneshos_middle
-            WHERE f_tomachineno = '11'
-              AND f_dispensestatus_ev = 0
-            ORDER BY f_prescriptionno";
-
-        // ─────────────────────────────────────────────────────────────────
-        private static string ToCsvRow(TbThaneshosMiddle r) =>
-            string.Join(",", new[]
-            {
-                Q(r.PrescriptionNo),        Q(r.PatientID),           Q(r.PatientName),
-                Q(r.HkId),                  Q(r.BirthDay),            Q(r.Sex),
-                Q(r.PatCatCd),              Q(r.SpecCd),              Q(r.IOFlag),
-                Q(r.HospitalCd),            Q(r.HospitalName),        Q(r.WorkStoreCd),
-                Q(r.WardCd),                Q(r.WardName),            Q(r.RoomNo),
-                Q(r.BedNo),                 Q(r.DoctorCd),            Q(r.DoctorName),
-                Q(r.PrescriptionDate),      Q(r.DrugCd),              Q(r.DrugName),
-                Q(r.TradeName),             Q(r.DispensedDose),       Q(r.DispensedUnit),
-                Q(r.FormCd),                Q(r.FreqDescCd),          Q(r.FreqDesc1),
-                Q(r.FreqDesc2),             Q(r.ItemNo),              Q(r.TicketNo),
-                QMsg(r.CautionMsg),
-                QMsg(r.WarningMsg1),        QMsg(r.WarningMsg2),      QMsg(r.WarningMsg3),
-                QMsg(r.WarningMsg4),        QMsg(r.WarningMsg5),      QMsg(r.WarningMsg6),
-                Q(r.UserCd),                Q(r.PrescType),           Q(r.FdnFlag),
-                Q(r.PrintLang),             Q(r.PrintType),           Q(r.PrintIntsFlag),
-                Q(r.PrintBarcodeFlag),      Q(r.PrintWardReturnFlag),
-                Q(r.PreBarCd1),             Q(r.PreBarCd2),
-                Q(r.DeltaChangeInd),        Q(r.UpdateDate),
-                Q(r.Reserve1),              Q(r.Reserve2),            Q(r.Reserve3),
-                Q(r.Reserve4),              Q(r.Reserve5)
-            });
-
-        private static string Q(string? v) =>
-            $"\"{(v ?? "").Replace("\"", "\"\"")}\"";
-
-        private static string QMsg(string? v)
-        {
-            if (v is null) return "\"\"";
-            var n = v.Replace("\r\n", "*\\n").Replace("\r", "*\\n").Replace("\n", "*\\n");
-            return $"\"{n.Replace("\"", "\"\"")}\"";
-        }
-
-        // ─────────────────────────────────────────────────────────────────
-        private static TbThaneshosMiddle MapRow(System.Data.Common.DbDataReader r) => new()
-        {
-            PrescriptionItemID = Col(r, "PrescriptionItemID"),
-            PrescriptionNo = Col(r, "PrescriptionNo"),
-            PatientID = Col(r, "PatientID"),
-            PatientName = Col(r, "PatientName"),
-            HkId = Col(r, "HkId"),
-            BirthDay = Col(r, "BirthDay"),
-            Sex = Col(r, "Sex"),
-            PatCatCd = Col(r, "PatCatCd"),
-            SpecCd = Col(r, "SpecCd"),
-            IOFlag = Col(r, "IOFlag"),
-            HospitalCd = Col(r, "HospitalCd"),
-            HospitalName = Col(r, "HospitalName"),
-            WorkStoreCd = Col(r, "WorkStoreCd"),
-            WardCd = Col(r, "WardCd"),
-            WardName = Col(r, "WardName"),
-            RoomNo = Col(r, "RoomNo"),
-            BedNo = Col(r, "BedNo"),
-            DoctorCd = Col(r, "DoctorCd"),
-            DoctorName = Col(r, "DoctorName"),
-            PrescriptionDate = Col(r, "PrescriptionDate"),
-            DrugCd = Col(r, "DrugCd"),
-            DrugName = Col(r, "DrugName"),
-            TradeName = Col(r, "TradeName"),
-            DispensedDose = Col(r, "DispensedDose"),
-            DispensedUnit = Col(r, "DispensedUnit"),
-            FormCd = Col(r, "FormCd"),
-            FreqDescCd = Col(r, "FreqDescCd"),
-            FreqDesc1 = Col(r, "FreqDesc1"),
-            FreqDesc2 = Col(r, "FreqDesc2"),
-            ItemNo = Col(r, "ItemNo"),
-            TicketNo = Col(r, "TicketNo"),
-            CautionMsg = Col(r, "CautionMsg"),
-            WarningMsg1 = Col(r, "WarningMsg1"),
-            WarningMsg2 = Col(r, "WarningMsg2"),
-            WarningMsg3 = Col(r, "WarningMsg3"),
-            WarningMsg4 = Col(r, "WarningMsg4"),
-            WarningMsg5 = Col(r, "WarningMsg5"),
-            WarningMsg6 = Col(r, "WarningMsg6"),
-            UserCd = Col(r, "UserCd"),
-            PrescType = Col(r, "PrescType"),
-            FdnFlag = Col(r, "FdnFlag"),
-            PrintLang = Col(r, "PrintLang"),
-            PrintType = Col(r, "PrintType"),
-            PrintIntsFlag = Col(r, "PrintIntsFlag"),
-            PrintBarcodeFlag = Col(r, "PrintBarcodeFlag"),
-            PrintWardReturnFlag = Col(r, "PrintWardReturnFlag"),
-            PreBarCd1 = Col(r, "PreBarCd1"),
-            PreBarCd2 = Col(r, "PreBarCd2"),
-            DeltaChangeInd = Col(r, "DeltaChangeInd"),
-            UpdateDate = Col(r, "UpdateDate"),
-            Reserve1 = Col(r, "Reserve1"),
-            Reserve2 = Col(r, "Reserve2"),
-            Reserve3 = Col(r, "Reserve3"),
-            Reserve4 = Col(r, "Reserve4"),
-            Reserve5 = Col(r, "Reserve5"),
-            f_tomachineno = Col(r, "f_tomachineno"),
-        };
-
-        private static string Col(System.Data.Common.DbDataReader r, string col)
-        {
-            int i = r.GetOrdinal(col);
-            return r.IsDBNull(i) ? "" : r.GetValue(i).ToString() ?? "";
-        }
-
-        // ─────────────────────────────────────────────────────────────────
+        // ── UI helpers ────────────────────────────────────────────────────
         private static void SetText(Control c, string v)
         {
             if (c.InvokeRequired) c.Invoke(() => c.Text = v);

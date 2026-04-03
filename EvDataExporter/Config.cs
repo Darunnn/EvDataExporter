@@ -5,29 +5,37 @@ namespace EvDataExporter
     /// <summary>
     /// อ่านและตรวจสอบความถูกต้องของ config.ini
     /// รองรับ format: Key=Value; (connection string style)
+    ///
+    /// MySQL  → Source หลัก (tb_thaneshos_middle)
+    /// MSSQL  → Lookup เพิ่มเติม เพื่อดึง ln_CassetteNo → BinNum (field 42)
     /// </summary>
     public class Config
     {
         // ── Path ─────────────────────────────────────────────────────────
         public string IniPath { get; }
 
-        // ── Config values (อ่านได้หลัง LoadAndValidate()) ───────────────
+        // ── MySQL config ─────────────────────────────────────────────────
         public string DbServer { get; private set; } = "";
         public string DbPort { get; private set; } = "3306";
         public string DbName { get; private set; } = "";
         public string DbUser { get; private set; } = "";
         public string DbPassword { get; private set; } = "";
-        public string SaveFolder { get; private set; } = "";
-        public string MachineNo { get; private set; } = "11";
 
-        // ── Validation result ────────────────────────────────────────────
+        // ── MSSQL Lookup config ──────────────────────────────────────────
+        public string MssqlServer { get; private set; } = "";
+        public string MssqlDatabase { get; private set; } = "";
+        public string MssqlUser { get; private set; } = "";
+        public string MssqlPassword { get; private set; } = "";
+        public bool MssqlTrustedConnection { get; private set; } = false;
+
+        // ── Export config ────────────────────────────────────────────────
+        public string SaveFolder { get; private set; } = "";
+
+        // ── Validation ───────────────────────────────────────────────────
         public bool IsValid { get; private set; }
         public List<ConfigError> Errors { get; private set; } = new();
 
         // ─────────────────────────────────────────────────────────────────
-        /// <summary>
-        /// ถ้าไม่ส่ง path → ใช้ [exe folder]\connectdatabase\config.ini
-        /// </summary>
         public Config(string? iniPath = null)
         {
             iniPath ??= Path.Combine(
@@ -67,25 +75,43 @@ namespace EvDataExporter
                 pairs[key] = val;
             }
 
+            // ── MySQL ────────────────────────────────────────────────────
             DbServer = Get(pairs, "Server");
             DbPort = Get(pairs, "Port", "3306");
             DbName = Get(pairs, "Database");
             DbUser = Get(pairs, "User Id");
             DbPassword = Get(pairs, "Password");
-            SaveFolder = Get(pairs, "SaveFolder");
-            MachineNo = Get(pairs, "MachineNo", "11");
 
+            // ── MSSQL Lookup ─────────────────────────────────────────────
+            MssqlServer = Get(pairs, "MssqlServer");
+            MssqlDatabase = Get(pairs, "MssqlDatabase");
+            MssqlUser = Get(pairs, "MssqlUser");
+            MssqlPassword = Get(pairs, "MssqlPassword");
+            MssqlTrustedConnection = Get(pairs, "MssqlTrustedConnection")
+                                        .Equals("true", StringComparison.OrdinalIgnoreCase);
+
+            // ── Export ───────────────────────────────────────────────────
+            SaveFolder = Get(pairs, "SaveFolder");
+
+            // ── Validate MySQL (required) ────────────────────────────────
             ValidateRequired(ConfigSection.Database, "Server", DbServer);
             ValidatePort(DbPort);
             ValidateRequired(ConfigSection.Database, "Database", DbName);
             ValidateRequired(ConfigSection.Database, "User Id", DbUser);
+
+            // ── Validate MSSQL (required) ────────────────────────────────
+            ValidateRequired(ConfigSection.MssqlLookup, "MssqlServer", MssqlServer);
+            ValidateRequired(ConfigSection.MssqlLookup, "MssqlDatabase", MssqlDatabase);
+            if (!MssqlTrustedConnection)
+                ValidateRequired(ConfigSection.MssqlLookup, "MssqlUser", MssqlUser);
+
+            // ── Validate Export ──────────────────────────────────────────
             ValidateSaveFolder(SaveFolder);
 
             IsValid = Errors.Count == 0;
         }
 
         // ─────────────────────────────────────────────────────────────────
-        /// <summary>สร้าง config.ini พร้อมโฟลเดอร์ถ้ายังไม่มี</summary>
         public void CreateDefault()
         {
             if (File.Exists(IniPath)) return;
@@ -101,7 +127,7 @@ namespace EvDataExporter
                 Errors.Select(e => $"[{e.Section}] {e.Key}: {e.Message}"));
         }
 
-        // ─────────────────────────────────────────────────────────────────
+        // ── Validation helpers ────────────────────────────────────────────
         private void ValidateRequired(ConfigSection sec, string key, string val)
         {
             if (string.IsNullOrWhiteSpace(val))
@@ -135,21 +161,29 @@ namespace EvDataExporter
             Dictionary<string, string> d, string key, string def = "")
             => d.TryGetValue(key, out var v) ? v : def;
 
+        // ─────────────────────────────────────────────────────────────────
         private static string DefaultTemplate() => """
             ; EV Data Exporter - config.ini
-            ; Database connection (MySQL)
+
+            ; ── MySQL Source ────────────────────────────────────────────────────────────
             Server=103.99.11.97;
             Database=db_thanes_system_pattaya;
             User Id=thanes1;
             Password=@Thanes1234;
 
-            ; Export settings
+            ; ── MSSQL Lookup (ดึง ln_CassetteNo → BinNum field 42) ───────────────────
+            MssqlServer=192.168.1.10\SQLEXPRESS;
+            MssqlDatabase=EV_Production_DB;
+            MssqlUser=sa;
+            MssqlPassword=YourMssqlPassword;
+            ; MssqlTrustedConnection=true
+
+            ; ── Export settings ──────────────────────────────────────────────────────
             SaveFolder=C:\EV_Data;
-            MachineNo=11;
             """;
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    public enum ConfigSection { File, Database, Export }
+    public enum ConfigSection { File, Database, MssqlLookup, Export }
     public record ConfigError(ConfigSection Section, string Key, string Message);
 }

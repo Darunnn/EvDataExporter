@@ -5,7 +5,8 @@ namespace EvDataExporter
     public partial class EvDataExporter : Form
     {
         private Config _config = null!;
-        private Databasetocsv? _db;
+        private Databasetocsv? _db = null;
+        private MssqlLookup? _mssqlLookup = null;
 
         private System.Timers.Timer? _timer;
         private bool _running = false;
@@ -15,7 +16,6 @@ namespace EvDataExporter
         public EvDataExporter()
         {
             InitializeComponent();
-            HideUnusedControls();
             InitializeTray();
 
             Load += OnFormLoad;
@@ -96,9 +96,13 @@ namespace EvDataExporter
 
         private async Task InitConfigAndConnectAsync()
         {
+            // ── ทำความสะอาด instance เดิม ─────────────────────────────────
             _db?.Dispose();
             _db = null;
+            _mssqlLookup?.Dispose();
+            _mssqlLookup = null;
 
+            // ── Load config ───────────────────────────────────────────────
             Logger.Info("Loading config...");
             _config = new Config();
             _config.CreateDefault();
@@ -115,22 +119,55 @@ namespace EvDataExporter
                 return;
             }
 
-            Logger.Info($"Config loaded — Server={_config.DbServer}, DB={_config.DbName}, MachineNo={_config.MachineNo}");
+            Logger.Info($"Config loaded — MySQL={_config.DbServer}/{_config.DbName} | " +
+                        $"MSSQL={_config.MssqlServer}/{_config.MssqlDatabase} | MachineNo=11 (hardcoded)");
 
+            // ── แสดงค่าใน UI ──────────────────────────────────────────────
             txtSourceServer.Text = _config.DbServer;
             txtSourceDb.Text = _config.DbName;
+            txtOutputServer.Text = _config.MssqlServer;   // แสดง MSSQL server
+            txtOutputDb.Text = _config.MssqlDatabase; // แสดง MSSQL database
             txtSavePath.Text = _config.SaveFolder;
 
-            Logger.Info("Testing database connection...");
-            _db = new Databasetocsv(_config, picSourceStatus, picDot, lblStatus);
+            // ── Test MySQL connection ─────────────────────────────────────
+            Logger.Info("Testing MySQL connection...");
+            _mssqlLookup = new MssqlLookup(_config);
+            _db = new Databasetocsv(_config, _mssqlLookup, picSourceStatus, picDot, lblStatus);
             await _db.TestConnectionAsync();
 
-            if (_db.IsConnected)
-                Logger.Info("Database connection OK");
-            else
-                Logger.Error("Database connection FAILED — ตรวจสอบ config.ini");
+            // ── Test MSSQL connection ─────────────────────────────────────
+            Logger.Info("Testing MSSQL connection...");
+            bool mssqlOk = await _mssqlLookup.TestConnectionAsync();
 
+            // ── แสดงสถานะ MSSQL dot ───────────────────────────────────────
+            var mssqlColor = mssqlOk
+                ? Color.FromArgb(52, 199, 89)
+                : Color.FromArgb(255, 69, 58);
+            PaintDotPublic(picOutputStatus, mssqlColor);
+
+            if (!mssqlOk)
+                Logger.Warning("MSSQL connection FAILED — BinNum (field 42) จะเป็นค่าว่าง");
+
+            // ── Enable Start เมื่อ MySQL พร้อม (MSSQL แค่ warn ไม่บล็อก) ──
             btnToggle.Enabled = _db.IsConnected;
+
+            if (_db.IsConnected)
+                Logger.Info("MySQL OK — ready to export");
+            else
+                Logger.Error("MySQL FAILED — ตรวจสอบ config.ini");
+        }
+
+        // ── Helper: paint dot จาก Form (ไม่ผ่าน Databasetocsv) ──────────
+        private static void PaintDotPublic(PictureBox pic, Color color)
+        {
+            if (pic.InvokeRequired) { pic.Invoke(() => PaintDotPublic(pic, color)); return; }
+            var bmp = new Bitmap(pic.Width, pic.Height);
+            using var g = Graphics.FromImage(bmp);
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.Clear(Color.Transparent);
+            using var br = new SolidBrush(color);
+            g.FillEllipse(br, 0, 0, pic.Width - 1, pic.Height - 1);
+            pic.Image = bmp;
         }
 
         // ─────────────────────────────────────────────────────────────────
@@ -149,11 +186,16 @@ namespace EvDataExporter
             btnToggle.Text = "⏹  Stop";
             btnToggle.BackColor = Color.FromArgb(200, 60, 50);
 
-            Logger.Info("Export service started — opening connection...");
+            Logger.Info("Export service started — opening connections...");
             try
             {
+                // MySQL
                 await _db!.OpenAsync();
-                Logger.Info("Connection opened successfully");
+                Logger.Info("MySQL connection opened");
+
+                // MSSQL Lookup
+                await _mssqlLookup!.OpenAsync();
+                Logger.Info("MSSQL Lookup connection opened");
             }
             catch (Exception ex)
             {
@@ -268,24 +310,6 @@ namespace EvDataExporter
         {
             if (InvokeRequired) Invoke(a);
             else a();
-        }
-
-        private void HideUnusedControls()
-        {
-            lblOutput.Visible = false;
-            lblOutputServer.Visible = false;
-            txtOutputServer.Visible = false;
-            lblOutputDb.Visible = false;
-            txtOutputDb.Visible = false;
-            picOutputStatus.Visible = false;
-
-            lblSource.Text = "DB";
-            lblSourceServer.Text = "Server";
-            lblSavePath.Text = "Save path";
-
-            txtSourceServer.ReadOnly = true;
-            txtSourceDb.ReadOnly = true;
-            txtSavePath.ReadOnly = true;
         }
     }
 }
