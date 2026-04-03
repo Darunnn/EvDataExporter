@@ -37,10 +37,9 @@
             lblSourceDb = new Label();
             txtSourceDb = new TextBox();
             picSourceStatus = new PictureBox();
-            lblOutput = new Label();
-            lblOutputServer = new Label();
+            this.lblOutputServer = new Label();
             txtOutputServer = new TextBox();
-            lblOutputDb = new Label();
+            this.lblOutputDb = new Label();
             txtOutputDb = new TextBox();
             picOutputStatus = new PictureBox();
             lblSavePath = new Label();
@@ -142,27 +141,16 @@
             picSourceStatus.TabIndex = 5;
             picSourceStatus.TabStop = false;
             // 
-            // lblOutput
-            // 
-            lblOutput.BackColor = Color.Transparent;
-            lblOutput.Font = new Font("Segoe UI", 7.5F, FontStyle.Bold);
-            lblOutput.ForeColor = Color.FromArgb(120, 119, 112);
-            lblOutput.Location = new Point(12, 51);
-            lblOutput.Name = "lblOutput";
-            lblOutput.Size = new Size(42, 15);
-            lblOutput.TabIndex = 6;
-            lblOutput.Text = "Output";
-            // 
             // lblOutputServer
             // 
-            lblOutputServer.BackColor = Color.Transparent;
-            lblOutputServer.Font = new Font("Segoe UI", 8F);
-            lblOutputServer.ForeColor = Color.FromArgb(120, 119, 112);
-            lblOutputServer.Location = new Point(58, 51);
-            lblOutputServer.Name = "lblOutputServer";
-            lblOutputServer.Size = new Size(38, 15);
-            lblOutputServer.TabIndex = 7;
-            lblOutputServer.Text = "Server";
+            this.lblOutputServer.BackColor = Color.Transparent;
+            this.lblOutputServer.Font = new Font("Segoe UI", 8F);
+            this.lblOutputServer.ForeColor = Color.FromArgb(120, 119, 112);
+            this.lblOutputServer.Location = new Point(58, 51);
+            this.lblOutputServer.Name = "lblOutputServer";
+            this.lblOutputServer.Size = new Size(38, 15);
+            this.lblOutputServer.TabIndex = 7;
+            this.lblOutputServer.Text = "Server";
             // 
             // txtOutputServer
             // 
@@ -178,14 +166,14 @@
             // 
             // lblOutputDb
             // 
-            lblOutputDb.BackColor = Color.Transparent;
-            lblOutputDb.Font = new Font("Segoe UI", 8F);
-            lblOutputDb.ForeColor = Color.FromArgb(120, 119, 112);
-            lblOutputDb.Location = new Point(242, 51);
-            lblOutputDb.Name = "lblOutputDb";
-            lblOutputDb.Size = new Size(52, 15);
-            lblOutputDb.TabIndex = 9;
-            lblOutputDb.Text = "Database";
+            this.lblOutputDb.BackColor = Color.Transparent;
+            this.lblOutputDb.Font = new Font("Segoe UI", 8F);
+            this.lblOutputDb.ForeColor = Color.FromArgb(120, 119, 112);
+            this.lblOutputDb.Location = new Point(242, 51);
+            this.lblOutputDb.Name = "lblOutputDb";
+            this.lblOutputDb.Size = new Size(52, 15);
+            this.lblOutputDb.TabIndex = 9;
+            this.lblOutputDb.Text = "Database";
             // 
             // txtOutputDb
             // 
@@ -423,10 +411,9 @@
             Controls.Add(lblSourceDb);
             Controls.Add(txtSourceDb);
             Controls.Add(picSourceStatus);
-            Controls.Add(lblOutput);
-            Controls.Add(lblOutputServer);
+            Controls.Add(this.lblOutputServer);
             Controls.Add(txtOutputServer);
-            Controls.Add(lblOutputDb);
+            Controls.Add(this.lblOutputDb);
             Controls.Add(txtOutputDb);
             Controls.Add(picOutputStatus);
             Controls.Add(lblSavePath);
@@ -462,8 +449,6 @@
         private Label lblSource, lblSourceServer, lblSourceDb;
         private TextBox txtSourceServer, txtSourceDb;
         private PictureBox picSourceStatus;
-
-        private Label lblOutput, lblOutputServer, lblOutputDb;
         private TextBox txtOutputServer, txtOutputDb;
         private PictureBox picOutputStatus;
 
