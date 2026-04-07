@@ -349,7 +349,7 @@ namespace EvDataExporter
                 /* 21 */ Q(r.DrugCd),
                 /* 22 */ Q(r.DrugName),
                 /* 23 */ Q(r.TradeName),
-                /* 24 */ Q(r.DispensedDose),
+                /* 24 */ QWholeNum(r.DispensedDose),
                 /* 25 */ Q(r.DispensedUnit),
                 /* 26 */ Q(r.FormCd),
                 /* 27 */ Q(r.FreqDescCd),
@@ -376,7 +376,10 @@ namespace EvDataExporter
                 /* 48 */ Q(r.PreBarCd1),
                 /* 49 */ Q(r.PreBarCd2),
                 /* 50 */ Q(r.DeltaChangeInd),
-                /* 51 */ Q(r.UpdateDate),
+                /* 51 */ Q(DateTime.TryParseExact(r.UpdateDate, "yyyy-MM-dd HH:mm:ss",
+              null, System.Globalization.DateTimeStyles.None, out var _ud)
+              ? _ud.ToString("yyyyMMdd HHmmss")
+              : r.UpdateDate),
                 /* 52 */ Q(r.Reserve1),
                 /* 53 */ Q(r.Reserve2),
                 /* 54 */ Q(r.Reserve3),
@@ -393,7 +396,14 @@ namespace EvDataExporter
             var n = v.Replace("\r\n", "*\\n").Replace("\r", "*\\n").Replace("\n", "*\\n");
             return $"\"{n.Replace("\"", "\"\"")}\"";
         }
-
+        private static string QWholeNum(string? v)
+        {
+            var s = (v ?? "").Trim();
+            if (decimal.TryParse(s, System.Globalization.NumberStyles.Any,
+                    System.Globalization.CultureInfo.InvariantCulture, out var d))
+                s = ((long)Math.Truncate(d)).ToString();
+            return $"\"{s.Replace("\"", "\"\"")}\"";
+        }
         // ─────────────────────────────────────────────────────────────────
         //  SELECT query
         // ─────────────────────────────────────────────────────────────────
