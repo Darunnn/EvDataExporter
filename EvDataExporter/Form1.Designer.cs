@@ -57,13 +57,15 @@
             panelStatusBar.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)picDot).BeginInit();
             SuspendLayout();
-
+            // 
             // notifyIcon1
+            // 
             notifyIcon1.Icon = (Icon)resources.GetObject("notifyIcon1.Icon");
             notifyIcon1.Text = "EvDataExporter";
             notifyIcon1.Visible = true;
-
-            // lblSource  — row 1
+            // 
+            // lblSource
+            // 
             lblSource.BackColor = Color.Transparent;
             lblSource.Font = new Font("Segoe UI", 7.5F, FontStyle.Bold);
             lblSource.ForeColor = Color.FromArgb(120, 119, 112);
@@ -72,8 +74,9 @@
             lblSource.Size = new Size(42, 15);
             lblSource.TabIndex = 0;
             lblSource.Text = "Source";
-
+            // 
             // lblSourceServer
+            // 
             lblSourceServer.BackColor = Color.Transparent;
             lblSourceServer.Font = new Font("Segoe UI", 8F);
             lblSourceServer.ForeColor = Color.FromArgb(120, 119, 112);
@@ -82,8 +85,9 @@
             lblSourceServer.Size = new Size(38, 15);
             lblSourceServer.TabIndex = 1;
             lblSourceServer.Text = "Server";
-
+            // 
             // txtSourceServer
+            // 
             txtSourceServer.BackColor = Color.White;
             txtSourceServer.BorderStyle = BorderStyle.FixedSingle;
             txtSourceServer.Font = new Font("Consolas", 7.5F);
@@ -93,8 +97,9 @@
             txtSourceServer.ReadOnly = true;
             txtSourceServer.Size = new Size(138, 19);
             txtSourceServer.TabIndex = 2;
-
+            // 
             // lblSourceDb
+            // 
             lblSourceDb.BackColor = Color.Transparent;
             lblSourceDb.Font = new Font("Segoe UI", 8F);
             lblSourceDb.ForeColor = Color.FromArgb(120, 119, 112);
@@ -103,8 +108,9 @@
             lblSourceDb.Size = new Size(52, 15);
             lblSourceDb.TabIndex = 3;
             lblSourceDb.Text = "Database";
-
+            // 
             // txtSourceDb
+            // 
             txtSourceDb.BackColor = Color.White;
             txtSourceDb.BorderStyle = BorderStyle.FixedSingle;
             txtSourceDb.Font = new Font("Consolas", 7.5F);
@@ -114,16 +120,18 @@
             txtSourceDb.ReadOnly = true;
             txtSourceDb.Size = new Size(148, 19);
             txtSourceDb.TabIndex = 4;
-
+            // 
             // picSourceStatus
+            // 
             picSourceStatus.BackColor = Color.Transparent;
             picSourceStatus.Location = new Point(452, 18);
             picSourceStatus.Name = "picSourceStatus";
             picSourceStatus.Size = new Size(10, 10);
             picSourceStatus.TabIndex = 5;
             picSourceStatus.TabStop = false;
-
-            // lblOutput  — row 2  (เปลี่ยนเป็น "Lookup")
+            // 
+            // lblOutput
+            // 
             lblOutput.BackColor = Color.Transparent;
             lblOutput.Font = new Font("Segoe UI", 7.5F, FontStyle.Bold);
             lblOutput.ForeColor = Color.FromArgb(120, 119, 112);
@@ -132,8 +140,9 @@
             lblOutput.Size = new Size(42, 15);
             lblOutput.TabIndex = 6;
             lblOutput.Text = "Lookup";
-
+            // 
             // lblOutputServer
+            // 
             lblOutputServer.BackColor = Color.Transparent;
             lblOutputServer.Font = new Font("Segoe UI", 8F);
             lblOutputServer.ForeColor = Color.FromArgb(120, 119, 112);
@@ -142,8 +151,9 @@
             lblOutputServer.Size = new Size(38, 15);
             lblOutputServer.TabIndex = 7;
             lblOutputServer.Text = "Server";
-
+            // 
             // txtOutputServer
+            // 
             txtOutputServer.BackColor = Color.White;
             txtOutputServer.BorderStyle = BorderStyle.FixedSingle;
             txtOutputServer.Font = new Font("Consolas", 7.5F);
@@ -153,8 +163,9 @@
             txtOutputServer.ReadOnly = true;
             txtOutputServer.Size = new Size(138, 19);
             txtOutputServer.TabIndex = 8;
-
+            // 
             // lblOutputDb
+            // 
             lblOutputDb.BackColor = Color.Transparent;
             lblOutputDb.Font = new Font("Segoe UI", 8F);
             lblOutputDb.ForeColor = Color.FromArgb(120, 119, 112);
@@ -163,8 +174,9 @@
             lblOutputDb.Size = new Size(52, 15);
             lblOutputDb.TabIndex = 9;
             lblOutputDb.Text = "Database";
-
+            // 
             // txtOutputDb
+            // 
             txtOutputDb.BackColor = Color.White;
             txtOutputDb.BorderStyle = BorderStyle.FixedSingle;
             txtOutputDb.Font = new Font("Consolas", 7.5F);
@@ -174,16 +186,18 @@
             txtOutputDb.ReadOnly = true;
             txtOutputDb.Size = new Size(148, 19);
             txtOutputDb.TabIndex = 10;
-
+            // 
             // picOutputStatus
+            // 
             picOutputStatus.BackColor = Color.Transparent;
             picOutputStatus.Location = new Point(452, 52);
             picOutputStatus.Name = "picOutputStatus";
             picOutputStatus.Size = new Size(10, 10);
             picOutputStatus.TabIndex = 11;
             picOutputStatus.TabStop = false;
-
-            // lblSavePath  — row 3
+            // 
+            // lblSavePath
+            // 
             lblSavePath.BackColor = Color.Transparent;
             lblSavePath.Font = new Font("Segoe UI", 8F);
             lblSavePath.ForeColor = Color.FromArgb(120, 119, 112);
@@ -192,8 +206,9 @@
             lblSavePath.Size = new Size(52, 15);
             lblSavePath.TabIndex = 12;
             lblSavePath.Text = "Save path";
-
-            // txtSavePath  — ย่อให้เหลือที่สำหรับปุ่ม Browse
+            // 
+            // txtSavePath
+            // 
             txtSavePath.BackColor = Color.White;
             txtSavePath.BorderStyle = BorderStyle.FixedSingle;
             txtSavePath.Font = new Font("Consolas", 7.5F);
@@ -203,8 +218,9 @@
             txtSavePath.ReadOnly = true;
             txtSavePath.Size = new Size(268, 19);
             txtSavePath.TabIndex = 13;
-
-            // btnBrowse  — ปุ่มเลือก folder
+            // 
+            // btnBrowse
+            // 
             btnBrowse.BackColor = Color.White;
             btnBrowse.Cursor = Cursors.Hand;
             btnBrowse.FlatAppearance.BorderColor = Color.FromArgb(220, 220, 215);
@@ -218,15 +234,17 @@
             btnBrowse.Text = "📁 Browse";
             btnBrowse.UseVisualStyleBackColor = false;
             btnBrowse.Click += OnBrowseClick;
-
+            // 
             // panelDivider
+            // 
             panelDivider.BackColor = Color.FromArgb(220, 220, 215);
             panelDivider.Location = new Point(12, 113);
             panelDivider.Name = "panelDivider";
             panelDivider.Size = new Size(489, 1);
             panelDivider.TabIndex = 15;
-
+            // 
             // cardTotal
+            // 
             cardTotal.BackColor = Color.White;
             cardTotal.BorderStyle = BorderStyle.FixedSingle;
             cardTotal.Controls.Add(lblTotalVal);
@@ -235,7 +253,9 @@
             cardTotal.Name = "cardTotal";
             cardTotal.Size = new Size(152, 44);
             cardTotal.TabIndex = 16;
-
+            // 
+            // lblTotalVal
+            // 
             lblTotalVal.BackColor = Color.Transparent;
             lblTotalVal.Font = new Font("Segoe UI", 13F, FontStyle.Bold);
             lblTotalVal.ForeColor = Color.FromArgb(30, 30, 28);
@@ -244,7 +264,9 @@
             lblTotalVal.Size = new Size(136, 20);
             lblTotalVal.TabIndex = 0;
             lblTotalVal.Text = "0";
-
+            // 
+            // lblTotalTitle
+            // 
             lblTotalTitle.BackColor = Color.Transparent;
             lblTotalTitle.Font = new Font("Segoe UI", 7.5F);
             lblTotalTitle.ForeColor = Color.FromArgb(120, 119, 112);
@@ -253,8 +275,9 @@
             lblTotalTitle.Size = new Size(136, 12);
             lblTotalTitle.TabIndex = 1;
             lblTotalTitle.Text = "Total rows";
-
+            // 
             // cardExported
+            // 
             cardExported.BackColor = Color.White;
             cardExported.BorderStyle = BorderStyle.FixedSingle;
             cardExported.Controls.Add(lblExportedVal);
@@ -263,7 +286,9 @@
             cardExported.Name = "cardExported";
             cardExported.Size = new Size(152, 44);
             cardExported.TabIndex = 17;
-
+            // 
+            // lblExportedVal
+            // 
             lblExportedVal.BackColor = Color.Transparent;
             lblExportedVal.Font = new Font("Segoe UI", 13F, FontStyle.Bold);
             lblExportedVal.ForeColor = Color.FromArgb(30, 30, 28);
@@ -272,7 +297,9 @@
             lblExportedVal.Size = new Size(136, 20);
             lblExportedVal.TabIndex = 0;
             lblExportedVal.Text = "0";
-
+            // 
+            // lblExportedTitle
+            // 
             lblExportedTitle.BackColor = Color.Transparent;
             lblExportedTitle.Font = new Font("Segoe UI", 7.5F);
             lblExportedTitle.ForeColor = Color.FromArgb(120, 119, 112);
@@ -281,8 +308,9 @@
             lblExportedTitle.Size = new Size(136, 12);
             lblExportedTitle.TabIndex = 1;
             lblExportedTitle.Text = "Exported";
-
+            // 
             // cardPct
+            // 
             cardPct.BackColor = Color.White;
             cardPct.BorderStyle = BorderStyle.FixedSingle;
             cardPct.Controls.Add(lblPctVal);
@@ -291,7 +319,9 @@
             cardPct.Name = "cardPct";
             cardPct.Size = new Size(153, 44);
             cardPct.TabIndex = 18;
-
+            // 
+            // lblPctVal
+            // 
             lblPctVal.BackColor = Color.Transparent;
             lblPctVal.Font = new Font("Segoe UI", 13F, FontStyle.Bold);
             lblPctVal.ForeColor = Color.FromArgb(30, 30, 28);
@@ -300,7 +330,9 @@
             lblPctVal.Size = new Size(136, 20);
             lblPctVal.TabIndex = 0;
             lblPctVal.Text = "0%";
-
+            // 
+            // lblPctTitle
+            // 
             lblPctTitle.BackColor = Color.Transparent;
             lblPctTitle.Font = new Font("Segoe UI", 7.5F);
             lblPctTitle.ForeColor = Color.FromArgb(120, 119, 112);
@@ -309,8 +341,9 @@
             lblPctTitle.Size = new Size(136, 12);
             lblPctTitle.TabIndex = 1;
             lblPctTitle.Text = "Progress";
-
+            // 
             // btnToggle
+            // 
             btnToggle.BackColor = Color.FromArgb(24, 95, 165);
             btnToggle.Cursor = Cursors.Hand;
             btnToggle.FlatAppearance.BorderSize = 0;
@@ -323,8 +356,9 @@
             btnToggle.TabIndex = 19;
             btnToggle.Text = "▶  Start";
             btnToggle.UseVisualStyleBackColor = false;
-
+            // 
             // btnSettings
+            // 
             btnSettings.BackColor = Color.White;
             btnSettings.Cursor = Cursors.Hand;
             btnSettings.FlatAppearance.BorderColor = Color.FromArgb(220, 220, 215);
@@ -337,8 +371,9 @@
             btnSettings.TabIndex = 20;
             btnSettings.Text = "⚙  Settings";
             btnSettings.UseVisualStyleBackColor = false;
-
+            // 
             // panelStatusBar
+            // 
             panelStatusBar.BackColor = Color.FromArgb(24, 95, 165);
             panelStatusBar.Controls.Add(picDot);
             panelStatusBar.Controls.Add(lblStatus);
@@ -347,14 +382,18 @@
             panelStatusBar.Name = "panelStatusBar";
             panelStatusBar.Size = new Size(521, 22);
             panelStatusBar.TabIndex = 21;
-
+            // 
+            // picDot
+            // 
             picDot.BackColor = Color.Transparent;
             picDot.Location = new Point(12, 7);
             picDot.Name = "picDot";
             picDot.Size = new Size(8, 8);
             picDot.TabIndex = 0;
             picDot.TabStop = false;
-
+            // 
+            // lblStatus
+            // 
             lblStatus.BackColor = Color.Transparent;
             lblStatus.Font = new Font("Segoe UI", 7.5F);
             lblStatus.ForeColor = Color.FromArgb(220, 220, 220);
@@ -363,7 +402,9 @@
             lblStatus.Size = new Size(260, 16);
             lblStatus.TabIndex = 1;
             lblStatus.Text = "Initializing…";
-
+            // 
+            // lblLastExport
+            // 
             lblLastExport.BackColor = Color.Transparent;
             lblLastExport.Font = new Font("Segoe UI", 7.5F);
             lblLastExport.ForeColor = Color.FromArgb(220, 220, 220);
@@ -373,8 +414,9 @@
             lblLastExport.TabIndex = 2;
             lblLastExport.Text = "Last export: --:--:--";
             lblLastExport.TextAlign = ContentAlignment.MiddleRight;
-
-            // EvDataExporter (Form)
+            // 
+            // EvDataExporter
+            // 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
             BackColor = Color.FromArgb(245, 245, 243);

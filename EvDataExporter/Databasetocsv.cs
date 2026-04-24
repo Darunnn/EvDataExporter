@@ -130,7 +130,7 @@ namespace EvDataExporter
 
             // ── อ่าน records ทั้งหมดก่อน เพื่อ prefetch BinNum ทีเดียว ──
             var rows = new List<TbThaneshosMiddle>();
-            using (var cmd = Conn.CreateCommand())
+            using (var cmd = Conn.CreateCommand()) 
             {
                 cmd.CommandText = BuildSelectQuery();
 
