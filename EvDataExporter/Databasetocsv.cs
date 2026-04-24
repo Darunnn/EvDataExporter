@@ -121,7 +121,7 @@ namespace EvDataExporter
             {
                 cnt.CommandText =
                     $"SELECT COUNT(*) FROM {_sourceDb}.tb_thaneshos_middle " +
-                    $"WHERE f_tomachineno = '11' AND f_dispensestatus_ev = 0";
+                    $"WHERE f_tomachineno = '11' AND f_dispensestatus_ev = 0 AND f_status = 0";
                 total = Convert.ToInt32(await cnt.ExecuteScalarAsync());
             }
 
@@ -440,6 +440,7 @@ namespace EvDataExporter
             FROM {_sourceDb}.tb_thaneshos_middle
             WHERE f_tomachineno = '11'
               AND f_dispensestatus_ev = 0
+              AND f_status = 0
             ORDER BY f_prescriptionno";
 
         // ─────────────────────────────────────────────────────────────────
