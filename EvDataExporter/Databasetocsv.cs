@@ -407,6 +407,7 @@ namespace EvDataExporter
         // ─────────────────────────────────────────────────────────────────
         //  SELECT query
         // ─────────────────────────────────────────────────────────────────
+       // -- f_roomcode AS RoomNo,   -- ไม่ใช้แล้ว(hardcoded ""1"")เดะกลับมาแก้
         private string BuildSelectQuery() =>
             $@"SELECT
                 PrescriptionItemID,
@@ -419,7 +420,7 @@ namespace EvDataExporter
                 f_sex                   AS Sex,
                 f_io_flag               AS Raw_f_io_flag,
                 f_pharmacylocationcode  AS WorkStoreCd,
-                f_roomcode              AS RoomNo,
+                
                 f_doctorcode            AS DoctorCd,
                 f_doctorname            AS DoctorName,
                 f_prescriptiondate      AS PrescriptionDate,
@@ -459,8 +460,10 @@ namespace EvDataExporter
             Raw_f_io_flag = Col(r, "Raw_f_io_flag"),
             WorkStoreCd = Col(r, "WorkStoreCd"),
             WorkStationCd = Col(r, "WorkStoreCd"),   // ใช้ค่าเดิม field 12
-            RoomNo = Col(r, "RoomNo"),
-            BedNo = Col(r, "RoomNo"),         // ใช้ค่าเดิม field 16
+            //RoomNo = Col(r, "RoomNo"),
+            //BedNo = Col(r, "RoomNo"),         // ใช้ค่าเดิม field 16
+            RoomNo = "1",            // hardcoded (เดิม: Col(r, "RoomNo") ← f_roomcode)
+            BedNo = "1",             // hardcoded (เดิม: Col(r, "RoomNo") ← f_roomcode, field 16)
             DoctorCd = Col(r, "DoctorCd"),
             DoctorName = Col(r, "DoctorName"),
             PrescriptionDate = Col(r, "PrescriptionDate"),
